@@ -6,6 +6,8 @@ A small Chrome extension for using ChatGPT, Claude, Gemini, and Grok together **
 
 The extension adds two small controls to each AI site, inside the site’s own interface. Nothing changes how the site normally works: its Send button and Enter still send only to that chat.
 
+![ChatGPT and Gemini side by side in Chrome Split View. Send both sits beside each composer, and Share with… sits in each reply toolbar.](figs/screnshot.png)
+
 ## What it does
 
 - **Send both**: a pill beside each site’s Send button. Type in the site’s usual composer and click **Send both** to send the same prompt here and to the chat on the other side of the split. Shortcut: **⌘⇧↩** (Ctrl+Shift+Enter on Windows/Linux) in the composer.
