@@ -39,8 +39,8 @@ export function createBridge(api, manager, { retryDelay = 500, retryLimit = 40 }
     const labels = [PROVIDERS[state.provider].name, ...targets.map(chat => chat.name)];
     const { text, files = [], notCopied = [] } = await ask(sourceId, 'ASB_READ_DRAFT');
     if (!Array.isArray(files) || !Array.isArray(notCopied) || files.length > MAX_FILES) throw new Error('The attachments could not be read. Nothing was sent.');
-    if (!files.length && notCopied.length && typeof text === 'string' && !text.trim()) {
-      throw new Error(`Nothing was sent. ${list(notCopied)} could not be copied. Attach it again in this chat, then try again.`);
+    if (notCopied.length) {
+      throw new Error(`Nothing was sent. ${list(notCopied)} could not be copied. Remove and reattach those files in this chat, then try again. Both chats need the same context.`);
     }
     validateText(text, { allowEmpty: files.length > 0 });
     const requestId = crypto.randomUUID();
@@ -69,10 +69,9 @@ export function createBridge(api, manager, { retryDelay = 500, retryLimit = 40 }
     const failed = results.flatMap((result, i) => result.status === 'rejected'
       ? [`${labels[i]}: ${result.reason.message} Delivery is unconfirmed; check this chat before sending again.`] : []);
     const sent = labels.filter((_, i) => results[i].status === 'fulfilled');
-    const only = notCopied.length && sent.length > 1 ? ` Only ${labels[0]} got ${list(notCopied)}.` : '';
     return {
-      ok: true, partial: failed.length > 0 || !!only,
-      message: (failed.length ? `${sent.length ? `Sent to ${list(sent)}. ` : ''}${failed.join(' ')}` : `Sent to ${list(labels)}.`) + only,
+      ok: true, partial: failed.length > 0,
+      message: failed.length ? `${sent.length ? `Sent to ${list(sent)}. ` : ''}${failed.join(' ')}` : `Sent to ${list(labels)}.`,
     };
   }
 

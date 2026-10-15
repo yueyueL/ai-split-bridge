@@ -121,19 +121,24 @@ test('attachment copies reach each destination once, at staging, while the sourc
   }
 });
 
-test('a files-only prompt sends, and attachments that could not be copied are named', async () => {
+test('a files-only prompt sends; unreadable attachments stop before any destination is changed', async () => {
   const { model, bridge } = setup();
   const file = { name: 'chart.png', type: 'image/png', data: 'AAAA' };
   model.respond = (id, message) => message.type === 'ASB_READ_DRAFT'
-    ? { ok: true, text: '', files: [file], notCopied: ['clip.mov (too large to copy)'] } : { ok: true };
+    ? { ok: true, text: '', files: [file], notCopied: [] } : { ok: true };
   const result = await bridge.send(1, [2]);
-  assert.equal(result.partial, true);
-  assert.equal(result.message, 'Sent to ChatGPT and Claude. Only ChatGPT got clip.mov (too large to copy).');
+  assert.equal(result.partial, false);
+  assert.equal(result.message, 'Sent to ChatGPT and Claude.');
   assert.equal(model.messages('ASB_STAGE').find(call => call.args[0] === 2).args[1].text, '');
 
   model.respond = (id, message) => message.type === 'ASB_READ_DRAFT'
     ? { ok: true, text: ' ', files: [], notCopied: ['1 attachment added before the extension could read it'] } : { ok: true };
   await assert.rejects(bridge.send(1, [2]), /Nothing was sent\. 1 attachment added before the extension could read it could not be copied/);
+  const before = model.messages('ASB_PREPARE').length;
+  model.respond = (id, message) => message.type === 'ASB_READ_DRAFT'
+    ? { ok: true, text: 'Compare these PDFs', files: [file], notCopied: ['missing.pdf'] } : { ok: true };
+  await assert.rejects(bridge.send(1, [2]), /missing.pdf could not be copied/);
+  assert.equal(model.messages('ASB_PREPARE').length, before);
   model.respond = (id, message) => message.type === 'ASB_READ_DRAFT' ? { ok: true, text: '', files: [], notCopied: [] } : { ok: true };
   await assert.rejects(bridge.send(1, [2]), /Write a message/);
 });

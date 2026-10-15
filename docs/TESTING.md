@@ -31,8 +31,18 @@ The fixture substitutes host detection and mocks extension messaging. It does no
 6. Let Chrome put a background AI tab to sleep (or discard it at `chrome://discards`). Confirm it is greyed out as **Asleep** and can’t be ticked.
 7. Try prompts with a pasted link and with a tool chip (for example ChatGPT’s “Create image”). Confirm the other chats receive the full link address and the chip’s label.
 8. Attach an image and a PDF (pick one, paste or drop the other), type a prompt, and click **Send both**. Confirm each other chat shows each file exactly once, waits for its upload, and then sends. Remove one attachment before sending and confirm only the remaining one is copied. Repeat with files only and no text.
-9. On a site that keeps attachments across a page refresh, attach a file, refresh, and send. The extension never saw that file being added, so confirm the notice says only this chat got it. Try a file type a destination refuses, and confirm nothing is sent anywhere and no copy is left behind.
+9. On a site that keeps attachments across a page refresh, attach a file, refresh, and send. The extension never saw that file being added, so confirm nothing is sent and the notice asks you to reattach it. Try a file type a destination refuses, and confirm nothing is sent anywhere. If a copy cannot be removed, the notice should identify the affected chat.
 10. If a notice says delivery is unconfirmed, inspect every chat before retrying.
+
+## PDF and long-text regression
+
+Use `tests/fixtures/bridge-test-a.pdf` and `bridge-test-b.pdf`; both contain synthetic verification tokens. In a new ChatGPT chat, attach both PDFs and paste at least 10,000 characters with distinct first and last markers, so ChatGPT makes a “Show in text field” card. Add a short instruction asking for both text markers and both PDF tokens. Send separately to Claude, Gemini, and Grok, each with an empty composer.
+
+- The pasted-text card should expand, retaining the separate short instruction and all pasted text.
+- Each destination should show exactly two PDFs, then submit only after the files are accepted. Gemini’s nested uploader/gem tiles must count as two files, not four or zero.
+- Each reply should contain both markers and `ORCHID-472` / `CEDAR-815`. A successful click alone does not pass this test.
+- Retry with one file removed, a failed upload, a nonempty destination, and a draft edited during staging. No source draft or user-added attachment may be erased on failure.
+- Reattach files after reloading the extension; references to previously chosen local files do not survive a reload.
 
 ## Share
 

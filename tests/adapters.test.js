@@ -242,6 +242,111 @@ test("a destination that shows no sign of the copies is never sent to", async (t
   assert.equal(fixture.clicks(), 0);
 });
 
+test('Gemini counts nested PDF tiles once and removes its close-labelled copies on rollback', async t => {
+  const f = setup('gemini'); t.after(f.close);
+  const site = acceptFiles(f, {on:[]});
+  f.editor.addEventListener('paste', e => {
+    e.preventDefault();
+    for (const file of e.clipboardData.files) {
+      const tile = f.window.document.createElement('uploader-file-preview');
+      tile.innerHTML = `<gem-attachment><span>PDF ${file.name}</span><button aria-label="close ${file.name}"></button></gem-attachment>`;
+      tile.querySelector('button').onclick = () => tile.remove(); site.tray.append(tile);
+    }
+  });
+  const request = {requestId:'gemini-pdfs',text:'Compare both PDFs',attachments:2};
+  f.adapter.preflight(request);
+  await f.adapter.stage({...request,files:['a.pdf','b.pdf'].map(name=>({name,type:'application/pdf',data:btoa('pdf')}))});
+  assert.equal((await f.adapter.validate(request)).ok,true);
+  assert.equal(f.clicks(),0);
+  assert.equal((await f.adapter.cancel(request)).leftAttachments,0);
+  assert.equal(site.tray.children.length,0);
+  assert.equal(f.adapter.getDraft().text,'');
+});
+
+for (const provider of ['claude','grok']) {
+  test(`${provider}: PDFs use the file input once even when unrelated DOM changes during upload`, async t => {
+    const f=setup(provider);t.after(f.close);
+    const site=acceptFiles(f,{on:[]});
+    const input=f.window.document.createElement('input');input.type='file';input.multiple=true;input.accept='*/*';
+    // jsdom has no DataTransfer/FileList, so the fake picker retains the supplied files.
+    Object.defineProperty(input,'files',{value:[],writable:true});
+    f.editor.closest('form').append(input);
+    let uploads=0, pasted=0;
+    f.editor.addEventListener('paste',()=>{pasted++;f.window.document.body.append(f.window.document.createElement('aside'));});
+    input.addEventListener('change',()=>{
+      uploads++;
+      const files=[...input.files];
+      setTimeout(()=>{for(const file of files){
+        const tile=f.window.document.createElement('div');tile.dataset.testid='file-thumbnail';
+        tile.innerHTML=`<img alt="${file.name}"><button aria-label="Remove ${file.name}"></button>`;
+        tile.querySelector('button').onclick=()=>tile.remove();site.tray.append(tile);
+      }},150);
+    });
+    const text='START-261\n'+('Long plain-text paragraph.\n'.repeat(700))+'END-934';
+    const request={requestId:'pdf-long',text,attachments:2};
+    f.adapter.preflight(request);
+    await f.adapter.stage({...request,files:['a.pdf','b.pdf'].map(name=>({name,type:'application/pdf',data:btoa('pdf')}))});
+    assert.equal((await f.adapter.validate(request)).ok,true);
+    assert.equal(f.adapter.getDraft().text,text);
+    assert.equal(uploads,1);assert.equal(pasted,0);
+    assert.equal(f.adapter.commit(request).status,'clicked');assert.equal(f.clicks(),1);
+  });
+}
+
+test('ChatGPT expands a collapsed paste before reading it and keeps the separate typed instructions', async t => {
+  const f=setup();t.after(f.close);
+  const text='START-261\n'+('Long pasted paragraph.\n'.repeat(700))+'END-934';
+  f.setDraft('Check the attached PDFs.');
+  const card=f.window.document.createElement('span');card.className='composer-attachment-surface';
+  card.innerHTML='<span>START-261 …</span><button>Show in text field</button><button aria-label="Remove pasted text attachment"></button>';
+  f.editor.closest('form').prepend(card);
+  card.querySelector('button').onclick=()=>{f.setDraft(f.adapter.getDraft().text+'\n\n'+text);card.remove();};
+  const prompt=await f.adapter.readPrompt();
+  assert.equal(prompt.text,'Check the attached PDFs.\n\n'+text);
+  assert.equal(prompt.notCopied.length,0);assert.equal(prompt.files.length,0);assert.equal(f.clicks(),0);
+  assert.equal(f.adapter.preflight({requestId:'expanded',text:prompt.text,source:true}).ok,true);
+});
+
+test('a rejected upload cannot be submitted even if the site enables Send', async t => {
+  const f=setup('claude');t.after(f.close);
+  const site=acceptFiles(f);
+  const request={requestId:'rejected-pdf',text:'Read the PDF',attachments:1};
+  f.adapter.preflight(request);
+  await f.adapter.stage({...request,files:[{name:'a.pdf',type:'application/pdf',data:btoa('pdf')}]});
+  site.tray.firstElementChild.dataset.state='failed';
+  site.tray.firstElementChild.prepend('Upload refused');
+  await assert.rejects(f.adapter.validate(request),/rejected an attachment/);
+  assert.throws(()=>f.adapter.commit(request),/rejected an attachment/);
+  await f.adapter.cancel(request);
+  assert.equal(site.tray.children.length,0);assert.equal(f.clicks(),0);
+});
+
+test('an enabled Send cannot submit a pending upload; validation waits for the tile to finish', async t => {
+  const f=setup('claude');t.after(f.close);
+  const site=acceptFiles(f);
+  const request={requestId:'pending-pdf',text:'Read the PDF',attachments:1};
+  f.adapter.preflight(request);
+  await f.adapter.stage({...request,files:[{name:'a.pdf',type:'application/pdf',data:btoa('pdf')}]});
+  const tile=site.tray.firstElementChild;tile.dataset.state='pending';tile.setAttribute('aria-busy','true');
+  assert.throws(()=>f.adapter.commit(request),/still processing/);
+  setTimeout(()=>{tile.dataset.state='complete';tile.removeAttribute('aria-busy');},300);
+  assert.equal((await f.adapter.validate(request)).ok,true);
+  assert.equal(f.adapter.commit(request).status,'clicked');assert.equal(f.clicks(),1);
+});
+
+test('cancellation preserves attachments added by the user during staging', async t => {
+  const f=setup('grok');t.after(f.close);
+  const site=acceptFiles(f);
+  const request={requestId:'user-files',text:'Check this',attachments:1};
+  f.adapter.preflight(request);
+  await f.adapter.stage({...request,files:[{name:'copied.pdf',type:'application/pdf',data:btoa('pdf')}]});
+  site.paste([new f.window.File(['mine'],'my-notes.txt')]);
+  assert.throws(()=>f.adapter.commit(request),/Attachments changed/);
+  assert.equal((await f.adapter.cancel(request)).leftAttachments,2);
+  assert.equal(site.tray.children.length,2);assert.equal(f.adapter.getDraft().text,'Check this');
+  assert.equal(f.clicks(),0);
+});
+
 test('navigation guard allows saved idle chats and refuses unsaved or temporary conversations', t => {
   const fixture=setup();t.after(fixture.close);
   assert.throws(()=>fixture.adapter.canLeave(),/saved conversation link/);

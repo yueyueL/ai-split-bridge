@@ -71,6 +71,9 @@
     "[data-testid='file-preview']", "[data-testid='file-pill']",
     "[data-testid='composer-file']", "[data-testid='attachment']",
     "file-preview", "image-preview", "attachment-preview",
+    ".composer-attachment-surface", "uploader-file-preview", "gem-attachment",
+    "[data-cds-attachment]",
+    "[role='list'][aria-label='Conversation attachments'] > [role='listitem']",
   ].join(", ");
   const FILE_WORD = /\b(files?|attachments?|images?|photos?|pictures?|documents?|uploads?|pdf)\b/i;
   const URL_LIKE = /^https?:\/\//i;
@@ -170,7 +173,7 @@
   const blankEditor = (editor) => !readEditor(editor) && !(editor.querySelector?.(MEDIA));
 
   function composerRoot(editor) {
-    return editor.closest("form, [data-testid='composer'], [data-testid='chat-input-container'], [data-composer-body], .rounded-composer, .query-bar, .text-input-field, .input-area-container, .input-area") || editor.parentElement;
+    return editor.closest("form, [data-testid='composer'], [data-testid='chat-input-container'], [data-cds='ChatComposer'], [data-composer-body], .rounded-composer, .query-bar, .text-input-field, .input-area-container, .input-area") || editor.parentElement;
   }
 
   function busy() {
@@ -194,6 +197,7 @@
 
   function isRemover(node, editor) {
     const label = normalize(node.getAttribute("aria-label") || node.title || "");
+    if (/^close\b/i.test(label) && node.closest('uploader-file-preview, gem-attachment')) return true;
     if (!/^(remove|delete|cancel)\b/i.test(label)) return false;
     if (FILE_WORD.test(label)) return true;
     // A bare "Remove" counts when it sits on a tile showing a thumbnail or a file name.
@@ -208,14 +212,30 @@
       .filter((node) => outsideEditor(node, editor) && isRemover(node, editor));
   }
 
-  function attachmentCount(editor) {
+  function attachmentTiles(editor) {
     const tiles = [...attachmentScope(editor).querySelectorAll(previewSelectors)].filter((node) => outsideEditor(node, editor));
-    const outermost = tiles.filter((node) => !tiles.some((other) => other !== node && other.contains(node)));
-    return Math.max(removers(editor).length, outermost.length);
+    return tiles.filter((node) => !tiles.some((other) => other !== node && other.contains(node)));
+  }
+
+  function attachmentCount(editor) {
+    return Math.max(removers(editor).length, attachmentTiles(editor).length);
   }
 
   function assertNoAttachments(editor) {
     if (attachmentCount(editor)) throw new Error(`${config.name} already has attachments in its composer. Send or remove them first; they have been kept.`);
+  }
+
+  function assertUploadsAccepted(editor) {
+    for (const tile of attachmentTiles(editor)) {
+      if (tile.matches('[data-state="failed"], [data-state="error"]') || tile.querySelector('[data-state="failed"], [data-state="error"]')) {
+        throw new Error(`${config.name} rejected an attachment. ${normalize(tile.textContent).slice(0,160)} Check or remove it before trying again.`);
+      }
+    }
+  }
+
+  function uploadsPending(editor) {
+    const pending = '[aria-busy="true"], [data-state="pending"], [data-state="uploading"], [data-state="processing"], [role="progressbar"]';
+    return attachmentTiles(editor).some(tile => tile.matches(pending) || [...tile.querySelectorAll(pending)].some(visible));
   }
 
   // Files are readable only while they are being attached, so remember each one as the site receives it.
@@ -226,6 +246,7 @@
   }
   function remember(files) {
     if (injecting || !files?.length) return;
+    for (const transaction of transactions.values()) transaction.attachmentsEdited = true;
     const editor = composerEditor();
     // Tiles render after this event, so an empty composer means earlier files were sent or removed.
     if (!editor || !attachmentCount(editor)) tray.length = 0;
@@ -243,6 +264,7 @@
     if (!button || injecting || !isRemover(button, editor)) return;
     const list = removers(editor);
     const index = list.indexOf(button);
+    if (index >= 0) for (const transaction of transactions.values()) transaction.attachmentsEdited = true;
     if (index >= 0 && list.length === tray.length) tray.splice(index, 1);
   }, true);
 
@@ -288,7 +310,28 @@
 
   // Reads the prompt to send: its text plus copies of the attachments this page saw being added.
   async function readPrompt() {
-    const editor = getEditor();
+    let editor = getEditor();
+    assertIdle();
+    assertUploadsAccepted(editor);
+    // ChatGPT folds a long paste into a separate card. Its preview is truncated,
+    // and clipboard files do not contain this text. Use the site's own expansion
+    // action so both chats receive the full prompt, including after a page reload.
+    if (provider === 'chatgpt') {
+      for (let i = 0; i < MAX_FILES; i++) {
+        const scope = attachmentScope(editor);
+        const cards = [...scope.querySelectorAll("button[aria-label='Remove pasted text attachment']")];
+        if (!cards.length) break;
+        const card = cards[0].parentElement;
+        const expand = [...card.querySelectorAll('button')].find(button => normalize(button.textContent) === 'Show in text field');
+        if (!expand || expand.disabled) throw new Error('The pasted text is still loading. Wait until “Show in text field” is available, then try again.');
+        expand.click();
+        if (!await until(() => !card.isConnected, 5000)) throw new Error('Could not expand the pasted text. Choose “Show in text field” before sending to both. Nothing was sent.');
+        editor = getEditor();
+      }
+      if (attachmentScope(editor).querySelector("button[aria-label='Remove pasted text attachment']")) {
+        throw new Error('Expand the remaining pasted text using “Show in text field” before sending to both.');
+      }
+    }
     const text = readEditor(editor);
     const { files, unknown } = attachedFiles(editor);
     const copies = [];
@@ -311,65 +354,47 @@
   function fileInput(editor, files) {
     const allows = (input, file) => !input.accept || input.accept.split(",").some((rule) => {
       rule = rule.trim().toLowerCase();
+      if (!rule || rule === '*/*') return true;
       if (rule.startsWith(".")) return file.name.toLowerCase().endsWith(rule);
       return rule.endsWith("/*") ? file.type.startsWith(rule.slice(0, -1)) : file.type === rule;
     });
     const inputs = [...document.querySelectorAll("input[type='file']")]
       .filter((input) => !input.disabled && (files.length === 1 || input.multiple) && files.every((file) => allows(input, file)));
     const scope = attachmentScope(editor);
-    return inputs.find((input) => scope.contains(input)) || inputs[0] || null;
+    return inputs.find((input) => scope.contains(input)) || (inputs.length === 1 ? inputs[0] : null);
   }
 
-  // Hands the files to the site the ways people do: paste, the file picker's input, then drag and drop.
-  // The next way is tried only when the page showed no reaction at all, so files are never added twice.
+  // Prefer the actual upload input, including Claude's hidden file-upload input.
+  // An unrelated DOM mutation is not upload acknowledgement. Hand off once and
+  // wait for attachment tiles; trying a second route can duplicate a slow upload.
   async function attach(transaction) {
     const { editor, files } = transaction;
     const start = attachmentCount(editor);
     transaction.removersBefore = new Set(removers(editor));
+    transaction.attachmentsBefore = start;
     const bundle = () => {
       const data = new DataTransfer();
       for (const file of files) data.items.add(file);
       return data;
     };
-    let reacted = false;
-    const observer = new MutationObserver((records) => {
-      if (records.some((record) => !editor.contains(record.target) && [...record.addedNodes, ...record.removedNodes].some((node) => !ours(node)))) reacted = true;
-    });
-    // Each returns false only when it could not be tried; a site that takes the files usually cancels the event.
-    const routes = [
-      () => {
-        editor.dispatchEvent(new ClipboardEvent("paste", { clipboardData: bundle(), bubbles: true, cancelable: true }));
-        return true;
-      },
-      () => {
-        const input = fileInput(editor, files);
-        if (!input) return false;
+    const input = fileInput(editor, files);
+    injecting = true;
+    try {
+      if (input) {
         input.files = bundle().files;
         input.dispatchEvent(new Event("input", { bubbles: true }));
         input.dispatchEvent(new Event("change", { bubbles: true }));
         transaction.input = input;
-        return true;
-      },
-      () => {
-        const data = bundle();
-        for (const type of ["dragenter", "dragover", "drop"]) editor.dispatchEvent(new DragEvent(type, { dataTransfer: data, bubbles: true, cancelable: true }));
-        return true;
-      },
-    ];
-    observer.observe(document.body, { childList: true, subtree: true });
-    try {
-      for (const route of routes) {
-        reacted = false;
-        injecting = true;
-        let tried;
-        try { tried = route(); } finally { injecting = false; }
-        if (tried !== false && await until(() => reacted || attachmentCount(editor) > start, 2500)) break;
+      } else {
+        editor.dispatchEvent(new ClipboardEvent("paste", { clipboardData: bundle(), bubbles: true, cancelable: true }));
       }
     } finally {
-      observer.disconnect();
+      injecting = false;
     }
-    const arrived = await until(() => attachmentCount(editor) >= start + files.length, 20_000);
-    // A reused file input would otherwise look like a pending attachment later.
+    const arrived = await until(() => {
+      assertUnchanged(transaction, transaction.text);
+      return attachmentCount(editor) >= start + files.length;
+    }, 30_000);
     if (transaction.input) transaction.input.value = "";
     if (!arrived) throw new Error(`${config.name} did not show the copied attachments. It may not accept these files.`);
   }
@@ -382,7 +407,8 @@
       try { added().at(-1).click(); } finally { injecting = false; }
       await wait(150);
     }
-    return added().length;
+    if (transaction.input) transaction.input.value = "";
+    return Math.max(added().length, attachmentCount(transaction.editor) - transaction.attachmentsBefore);
   }
 
   function sendButton(editor) {
@@ -424,6 +450,7 @@
       throw new Error("The conversation changed during the request. Nothing further will be sent.");
     }
     if (!matchesDraft(transaction.editor, expected)) throw new Error("A draft changed during the request. Your edits have been kept; nothing further will be sent.");
+    if (transaction.attachmentsEdited) throw new Error('Attachments changed during the request. Your edits have been kept; nothing further will be sent.');
     assertIdle();
     // Once copies are being attached, the tiles are this request's own.
     if (!transaction.source && !transaction.removersBefore) assertNoAttachments(transaction.editor);
@@ -485,7 +512,7 @@
     if (!source) assertNoAttachments(editor);
     // Send stays disabled while the site uploads attachments; validation waits for it.
     if (source && !attached) sendButton(editor);
-    transactions.set(id, { editor, text, original, source, attachments, files: [], url: location.href, state: "prepared", expires: Date.now() + TRANSACTION_TTL });
+    transactions.set(id, { editor, text, original, source, attachments, sourceAttachments: source ? attached : 0, files: [], url: location.href, state: "prepared", expires: Date.now() + TRANSACTION_TTL + (attached ? 90_000 : 0) });
     return { ok: true };
   }
 
@@ -511,6 +538,10 @@
   function ready(transaction) {
     if (transaction.state !== "staged") throw new Error("The draft has not been staged.");
     assertUnchanged(transaction, transaction.text);
+    assertUploadsAccepted(transaction.editor);
+    if (uploadsPending(transaction.editor)) throw new Error(`${config.name} is still processing the attachments. Wait for them to finish.`);
+    const expected = transaction.source ? transaction.sourceAttachments : transaction.attachments;
+    if (attachmentCount(transaction.editor) !== expected) throw new Error(`${config.name}'s attachments changed or an upload failed. Check its composer; nothing further was sent.`);
     return sendButton(transaction.editor);
   }
 
@@ -518,11 +549,15 @@
     const transaction = transactionFor(id);
     if (transaction.files.length || attachmentCount(transaction.editor)) {
       // Uploads keep Send disabled for a while after the tiles appear.
-      await until(() => { try { return !!ready(transaction); } catch { return false; } }, 60_000, 250);
+      await until(() => {
+        assertUnchanged(transaction, transaction.text);
+        assertUploadsAccepted(transaction.editor);
+        try { return !!ready(transaction); } catch { return false; }
+      }, 60_000, 250);
     }
     ready(transaction);
     // Other chats may still be uploading; keep this one's request alive until they are ready too.
-    transaction.expires = Date.now() + TRANSACTION_TTL;
+    transaction.expires = Date.now() + TRANSACTION_TTL + (transaction.attachments || transaction.sourceAttachments ? 90_000 : 0);
     return { ok: true };
   }
 
@@ -545,10 +580,13 @@
     let leftAttachments = 0;
     if (transaction && !transaction.source && transaction.state === "staged"
       && location.href === transaction.url && transaction.editor.isConnected
+      && !transaction.attachmentsEdited
       && matchesDraft(transaction.editor, transaction.text)) {
       // Never erase a user edit, or touch the source prompt during rollback.
       if (transaction.removersBefore) leftAttachments = await detach(transaction);
       if (transaction.text) await writeEditor(transaction.editor, transaction.original);
+    } else if (transaction?.removersBefore && transaction.editor.isConnected && location.href === transaction.url) {
+      leftAttachments = Math.max(0, attachmentCount(transaction.editor) - transaction.attachmentsBefore);
     }
     return { ok: true, leftAttachments };
   }

@@ -4,6 +4,11 @@
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 
+const pdfFixtures = await Promise.all(['a', 'b'].map(async letter => ({
+  name: `bridge-test-${letter}.pdf`, type: 'application/pdf',
+  data: (await readFile(new URL(`./fixtures/bridge-test-${letter}.pdf`, import.meta.url))).toString('base64'),
+})));
+
 const hosts = { chatgpt: 'chatgpt.com', claude: 'claude.ai', gemini: 'gemini.google.com', grok: 'grok.com' };
 const names = { chatgpt: 'ChatGPT', claude: 'Claude', gemini: 'Gemini', grok: 'Grok' };
 const icon = '<svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="PATH"/></svg>';
@@ -170,13 +175,15 @@ const server = createServer(async (req, res) => {
         // Like the real sites: pasted, dropped, or picked files become removable tiles above the editor.
         const box=document.querySelector('.composer');const tiles=document.createElement('div');tiles.className='tiles';box.prepend(tiles);
         const picker=Object.assign(document.createElement('input'),{type:'file',multiple:true,hidden:true});box.append(picker);
-        const addFiles=files=>{for(const file of files){const tile=document.createElement('div');tile.className='tile';tile.dataset.testid='file-preview';
-          tile.innerHTML='<span></span><button type="button" aria-label="Remove file">×</button>';tile.firstChild.textContent=file.name;
-          tile.lastChild.onclick=()=>tile.remove();tiles.append(tile);}};
+        let pickerUploads=0;const received=[];
+        const addFiles=files=>{for(const file of files){received.push(file);const tile=document.createElement('${provider === 'gemini' ? 'uploader-file-preview' : 'div'}');tile.className='tile';
+          ${provider === 'gemini' ? `tile.innerHTML='<gem-attachment><span></span><button type="button">×</button></gem-attachment>';` : `tile.dataset.testid='file-thumbnail';tile.innerHTML='<span></span><button type="button">×</button>';`}
+          tile.querySelector('span').textContent=file.name;const remove=tile.querySelector('button');remove.setAttribute('aria-label','${provider === 'gemini' ? 'close' : 'Remove'} '+file.name);
+          remove.onclick=()=>tile.remove();tiles.append(tile);}};
         box.addEventListener('paste',e=>{if(e.clipboardData?.files.length){e.preventDefault();addFiles(e.clipboardData.files);}});
         box.addEventListener('dragover',e=>e.preventDefault());
         box.addEventListener('drop',e=>{e.preventDefault();addFiles(e.dataTransfer.files);});
-        picker.addEventListener('change',()=>addFiles(picker.files));
+        picker.addEventListener('change',()=>{pickerUploads++;addFiles(picker.files);});
         document.getElementById('run').onclick=async()=>{
           const output=document.getElementById('results');output.textContent='Running…';
           const log=[];const check=(ok,label)=>{if(!ok)throw Error(label);log.push('PASS '+label);};
@@ -184,12 +191,12 @@ const server = createServer(async (req, res) => {
           try {
             editor.replaceChildren();clicks=0;inputs=0;
             const payload={requestId:crypto.randomUUID(),text,source:false};
-            a.preflight(payload);await a.stage(payload);a.validate(payload);
+            a.preflight(payload);await a.stage(payload);await a.validate(payload);
             check(a.getDraft().text===text,'Multiline contenteditable insertion preserves text');
             check(inputs>0,'Browser editing emits an input event');
             await a.cancel(payload);check(a.getDraft().text==='','Cancellation clears the staged draft');
             const next={...payload,requestId:crypto.randomUUID()};
-            a.preflight(next);await a.stage(next);a.validate(next);a.commit(next);
+            a.preflight(next);await a.stage(next);await a.validate(next);a.commit(next);
             check(clicks===1,'Commit clicks the identified Send button once');
             try{a.commit(next);}catch{}check(clicks===1,'Repeated commit does not click again');
             editor.replaceChildren();await a.insert({text:'A shared draft'});
@@ -210,6 +217,22 @@ const server = createServer(async (req, res) => {
             check(tiles.children.length===1&&tiles.textContent.includes('notes.txt')&&a.getDraft().text==='With a file','Copied attachments appear in the composer once');
             await a.cancel(copy);
             check(tiles.children.length===0&&a.getDraft().text==='','Cancel removes the copied attachment and text');
+            const pdfs=${JSON.stringify(pdfFixtures)};
+            const longText='START-MARIGOLD-261\\n'+('Long prompt with two PDFs. Preserve every line.\\n'.repeat(700))+'END-LANTERN-934';
+            const pdfRequest={requestId:crypto.randomUUID(),text:longText,source:false,attachments:2};
+            const before=pickerUploads;received.length=0;
+            a.preflight(pdfRequest);await a.stage({...pdfRequest,files:pdfs});await a.validate(pdfRequest);
+            check(pickerUploads===before+1&&received.length===2&&tiles.children.length===2,'Two PDFs use one upload event with no duplicates');
+            check(a.getDraft().text===longText,'Long text keeps both markers and every line alongside PDFs');
+            const bytes=await Promise.all(received.map(async file=>btoa(String.fromCharCode(...new Uint8Array(await file.arrayBuffer())))));
+            check(bytes.every((data,i)=>data===pdfs[i].data),'Both PDF files arrive byte-for-byte intact');
+            await a.cancel(pdfRequest);check(tiles.children.length===0&&a.getDraft().text==='','Two-file rollback leaves an empty destination');
+            ${provider === 'chatgpt' ? `
+            const card=document.createElement('span');card.className='composer-attachment-surface';
+            card.innerHTML='<span>Truncated long paste…</span><button type="button">Show in text field</button><button type="button" aria-label="Remove pasted text attachment">×</button>';
+            tiles.append(card);editor.textContent='Check these documents.';
+            card.querySelector('button').onclick=()=>{editor.textContent+='\\n\\n'+longText;card.remove();};
+            check((await a.readPrompt()).text==='Check these documents.\\n\\n'+longText,'Collapsed pasted-text card expands into the complete prompt');` : ''}
             editor.replaceChildren();output.textContent=log.join('\\n')+'\\n'+log.length+' checks passed.';
           }catch(error){output.textContent=log.join('\\n')+'\\nFAIL '+error.message;}
         };
