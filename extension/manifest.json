@@ -1,0 +1,52 @@
+{
+  "manifest_version": 3,
+  "name": "AI Split Bridge",
+  "version": "0.6.1",
+  "description": "Send a prompt to two AI chats, share replies, and switch assistants in Chrome's native Split View.",
+  "minimum_chrome_version": "140",
+  "icons": {
+    "16": "icons/mark-16.png",
+    "32": "icons/mark-32.png",
+    "48": "icons/tile-48.png",
+    "128": "icons/tile-128.png"
+  },
+  "permissions": [
+    "storage"
+  ],
+  "host_permissions": [
+    "https://chatgpt.com/*",
+    "https://chat.openai.com/*",
+    "https://claude.ai/*",
+    "https://gemini.google.com/*",
+    "https://grok.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "AI Split Bridge",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/mark-16.png",
+      "24": "icons/mark-24.png",
+      "32": "icons/mark-32.png"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://chatgpt.com/*",
+        "https://chat.openai.com/*",
+        "https://claude.ai/*",
+        "https://gemini.google.com/*",
+        "https://grok.com/*"
+      ],
+      "js": [
+        "adapters.js",
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}

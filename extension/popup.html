@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI Split Bridge</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header>
+    <img class="mark" src="icons/mark-64.png" alt="" width="32" height="32">
+    <div><h1>AI Split Bridge</h1><p id="capability">Checking Chrome’s Split View support…</p></div>
+  </header>
+
+  <section id="pair-section" hidden>
+    <h2>Split View</h2>
+    <form id="pair-form" class="card">
+      <div class="row"><label for="left">Left</label><select id="left" required></select></div>
+      <div class="row"><label for="right">Right</label><select id="right" required></select></div>
+      <div class="row end"><button id="pair" class="primary" type="submit">Create split</button></div>
+    </form>
+  </section>
+
+  <section>
+    <h2>Open an assistant</h2>
+    <div class="providers">
+      <button type="button" class="chip" data-provider="chatgpt">ChatGPT</button>
+      <button type="button" class="chip" data-provider="claude">Claude</button>
+      <button type="button" class="chip" data-provider="gemini">Gemini</button>
+      <button type="button" class="chip" data-provider="grok">Grok</button>
+    </div>
+    <p id="status" role="status" aria-live="polite"></p>
+  </section>
+
+  <section>
+    <h2>Sharing replies</h2>
+    <form id="share-settings" class="card">
+      <div class="row">
+        <label for="send-now" class="grow"><span class="title">Send right away</span><span id="mode-detail" class="detail">The reply is sent to the chat you pick.</span></label>
+        <input id="send-now" type="checkbox" role="switch" class="switch">
+      </div>
+      <div class="field">
+        <div class="field-head"><label for="share-message" class="title">Message with the shared reply</label><span id="count" class="detail" aria-live="off"></span></div>
+        <textarea id="share-message" rows="6" maxlength="4000" spellcheck="true"></textarea>
+        <div class="field-foot">
+          <span class="detail">Insert</span>
+          <button type="button" class="tag" data-insert="{assistant}" title="The assistant’s name, such as ChatGPT">{assistant}</button>
+          <button type="button" class="tag" data-insert="{reply}" title="The reply text. Without it, the reply goes at the end">{reply}</button>
+          <button type="button" id="reset-message" class="text-button">Reset</button>
+        </div>
+      </div>
+    </form>
+    <p id="saved" class="saved" role="status" aria-live="polite"></p>
+  </section>
+
+  <footer><b>Send both</b> sits beside each chat’s Send button. <b>Share with…</b> sits in each reply’s toolbar, next to Copy.</footer>
+  <script type="module" src="popup.js"></script>
+</body>
+</html>
