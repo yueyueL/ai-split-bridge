@@ -5,6 +5,7 @@
   // rather than send a message through an unrelated control.
   // `voice` and `group` only position the extension's button; they are never clicked.
   // `ignore` lists reply decorations, such as citation badges, left out of shared text.
+  // `prompts` match the user's own messages; one after a reply shows that reply is finished.
   const providers = {
     chatgpt: {
       name: "ChatGPT",
@@ -14,6 +15,7 @@
       stop: ["button[data-testid='stop-button']", "button[aria-label='Stop generating']", "button[aria-label='Stop streaming']", "button[aria-label='Stop']"],
       voice: ["button[data-testid='composer-speech-button']", "button[aria-label^='Start voice' i]", "button[aria-label^='Start dictation' i]", "button[aria-label^='Dictate' i]", "button[data-start-dictation]"],
       responses: ["[data-markdown-text-style='assistant-message']", "[data-message-role='assistant'] [data-assistant-markdown-root]", "[data-message-author-role='assistant'] .markdown", "[data-message-author-role='assistant']"],
+      prompts: ["[data-message-author-role='user']", "[data-content-search-unit-key$=':user']"],
       ignore: ["[data-d-component='badge']"],
     },
     claude: {
@@ -24,6 +26,7 @@
       stop: ["button[aria-label='Stop response']", "button[aria-label='Stop Response']", "button[aria-label='Stop generating']", "button[data-testid='stop-button']"],
       voice: ["button[aria-label='Use voice mode']", "button[aria-label^='Dictat']"],
       responses: ["[data-testid='assistant-message']", ".font-claude-response"],
+      prompts: ["[data-testid='user-message']"],
     },
     gemini: {
       name: "Gemini",
@@ -34,6 +37,7 @@
       voice: ["button[aria-label^='Dictate']", "button[aria-label='Microphone']"],
       group: [".input-buttons-wrapper-bottom"],
       responses: ["model-response .model-response-text", "model-response message-content", "model-response .markdown-main-panel"],
+      prompts: ["user-query"],
     },
     grok: {
       name: "Grok",
@@ -637,11 +641,18 @@
     return normalize(selection.toString());
   }
 
+  // A newer prompt or reply after this one means it is finished, even while the site writes the next reply.
+  function followedByNewer(element) {
+    const later = [...config.responses, ...(config.prompts || [])].join(", ");
+    return [...document.querySelectorAll(later)].some((node) => visible(node) && !element.contains(node)
+      && !!(element.compareDocumentPosition(node) & Node.DOCUMENT_POSITION_FOLLOWING));
+  }
+
   // Reads one reply, or only the part of it the user has selected.
   function replyText(element) {
     const selected = selectedWithin(element);
     if (selected) return { ok: true, text: checkedText(selected), partial: true };
-    if (element === latestReply()) assertIdle();
+    if (!followedByNewer(element)) assertIdle();
     const text = responseText(element);
     if (!text) throw new Error(`This ${config.name} reply has no text to share. Select the text you want, then try again.`);
     return { ok: true, text: checkedText(text), partial: false };
@@ -654,6 +665,8 @@
   function getResponse() {
     const latest = latestReply();
     if (!latest) throw new Error(`Could not find a reply from ${config.name}. Select the reply text on the page, then try again.`);
+    // While the newest reply is still being written, an older one must not be passed off as the latest.
+    if (!selectedWithin(latest) && followedByNewer(latest)) assertIdle();
     return replyText(latest);
   }
 

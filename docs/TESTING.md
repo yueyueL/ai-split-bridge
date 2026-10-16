@@ -53,6 +53,7 @@ Use `tests/fixtures/bridge-test-a.pdf` and `bridge-test-b.pdf`; both contain syn
 5. Choose a chat from another tab. Confirm it appears on the other side and then receives the message. In navigation mode, confirm the conversation that was there comes back when you show it again from the arrow menu.
 6. Choose an assistant that isn’t open. Confirm it opens on the other side and receives the message after loading.
 7. Share into a nonempty composer, or into a chat that is still replying. Confirm nothing is sent, the original draft survives, and an error explains why.
+8. Exchange replies without waiting: share ChatGPT’s reply with Claude, then, while Claude is still writing its answer, click **Share with…** on Claude’s previous reply and choose ChatGPT. Confirm it is sent to ChatGPT right away. **Share with…** on a reply that is still being written, or being regenerated, must still say to wait.
 
 ## Show on the other side
 

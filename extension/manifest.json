@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "AI Split Bridge",
-  "version": "0.6.2",
+  "version": "0.6.3",
   "description": "Send a prompt to two AI chats, share replies, and switch assistants in Chrome's native Split View.",
   "minimum_chrome_version": "140",
   "icons": {

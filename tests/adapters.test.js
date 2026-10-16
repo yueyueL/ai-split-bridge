@@ -579,6 +579,35 @@ for (const [provider, turn] of Object.entries(replyLayouts)) {
   });
 }
 
+const writing = {
+  chatgpt: { prompt: "<div data-content-search-unit-key='2:user'><div>Shared reply</div></div>", reply: "<div data-content-search-unit-key='2:assistant'><div data-markdown-text-style='assistant-message'><p>Still writ</p></div></div>" },
+  claude: {
+    turn: (n) => `<div data-testid='user-message'><p>Question ${n}?</p></div><div><div class='font-claude-response'><p>Answer ${n} here.</p></div><div><button aria-label='Copy'></button><button aria-label='Give positive feedback'></button><button aria-label='Retry'></button></div></div>`,
+    prompt: "<div data-testid='user-message'><p>Shared reply</p></div>", reply: "<div><div class='font-claude-response'><p>Still writ</p></div></div>",
+  },
+  gemini: { prompt: "<user-query><p>Shared reply</p></user-query>", reply: "<model-response><div class='model-response-text'><p>Still writ</p></div></model-response>" },
+  grok: { reply: "<div><div data-testid='assistant-message'><p>Still writ</p></div></div>" },
+};
+
+for (const [provider, { turn = replyLayouts[provider], prompt, reply }] of Object.entries(writing)) {
+  test(`${provider}: an earlier reply can be shared while the chat writes a newer one`, (t) => {
+    const stop = "<button data-testid='stop-button' class='stop-button' aria-label='Stop response'></button>";
+    const fixture = setup(provider, { body: `<main>${turn(1)}</main><form>${fixtures[provider].editor}${stop}</form>`, url: `https://${fixtures[provider].host}/c/saved` });
+    t.after(fixture.close);
+    const { adapter } = fixture;
+    const main = fixture.window.document.querySelector("main");
+    const [earlier] = adapter.replyAnchors();
+    assert.throws(() => adapter.replyText(earlier.response), /still responding/, "the newest reply may still be growing");
+    if (prompt) {
+      main.insertAdjacentHTML("beforeend", prompt);
+      assert.match(adapter.replyText(earlier.response).text, /^Answer 1 here\./, "a newer prompt shows it is finished");
+    }
+    main.insertAdjacentHTML("beforeend", reply);
+    assert.match(adapter.replyText(earlier.response).text, /^Answer 1 here\./, "a newer reply shows it is finished");
+    assert.throws(() => adapter.getResponse(), /still responding/, "an older reply is never passed off as the latest");
+  });
+}
+
 test("a reply whose markup is not recognized still gets Share from its action bar", (t) => {
   const body = replyLayouts.chatgpt(1).replace("data-markdown-text-style='assistant-message'", "data-new-reply");
   const fixture = setup("chatgpt", { body: `<main>${body}</main><form>${fixtures.chatgpt.editor}</form>`, url: "https://chatgpt.com/c/saved" });
