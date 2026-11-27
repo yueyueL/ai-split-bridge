@@ -12,6 +12,116 @@
     <div><h1>AI Split Bridge</h1><p id="capability" data-i18n>Checking Chrome’s Split View support…</p></div>
   </header>
 
+  <section id="sharing-section">
+    <h2 data-i18n>Sharing</h2>
+    <div class="card">
+      <div class="row">
+        <label for="send-now" class="grow"><span class="title" data-i18n>Send right away</span><span id="mode-detail" class="detail" data-i18n>Send shared messages, comparisons and cross-reviews immediately.</span></label>
+        <input id="send-now" type="checkbox" role="switch" class="switch" disabled>
+      </div>
+    </div>
+    <div id="action-settings" class="card field" role="group" aria-labelledby="actions-title">
+      <div class="action-head">
+        <h3 id="actions-title" data-i18n>Actions</h3>
+        <button type="button" id="add-action" class="chip" data-i18n disabled>Add action</button>
+      </div>
+      <fieldset id="action-kinds" class="kind-tabs" aria-labelledby="actions-title">
+        <label><input type="radio" name="action-kind" value="reply" checked><span data-i18n>Replies</span></label>
+        <label><input type="radio" name="action-kind" value="prompt"><span data-i18n>My prompts</span></label>
+        <label><input type="radio" name="action-kind" value="review"><span data-i18n>Cross-review</span></label>
+      </fieldset>
+      <fieldset id="action-picker">
+        <p class="detail" id="action-default-hint" data-i18n>Use the selected action for one-click sharing or cross-review.</p>
+        <ul id="action-list" aria-describedby="action-default-hint"></ul>
+      </fieldset>
+      <form id="action-editor" hidden autocomplete="off">
+        <fieldset>
+          <div class="instruction-field">
+            <label for="action-title" class="title" data-i18n>Action name</label>
+            <input id="action-title" required>
+          </div>
+          <div class="instruction-field">
+            <label for="action-prompt" class="title" data-i18n>Action prompt</label>
+            <textarea id="action-prompt" rows="4" aria-describedby="action-hint" required></textarea>
+            <p class="detail" id="action-hint"></p>
+            <div id="action-placeholders">
+              <button type="button" class="tag" data-action-token="{assistant}" title="The assistant’s name, such as ChatGPT" data-i18n-title>{assistant}</button>
+              <button type="button" class="tag" data-action-token="{content}" title="The shared text. Without it, the text goes at the end" data-i18n-title>{content}</button>
+            </div>
+          </div>
+          <div class="instruction-buttons">
+            <button id="reset-action" type="button" class="text-button" data-i18n hidden>Reset prompt</button>
+            <button id="delete-action" type="button" class="text-button" data-i18n hidden>Delete action</button>
+            <button id="cancel-action" type="button" class="text-button" data-i18n>Cancel</button>
+            <button id="save-action" type="submit" class="primary" data-i18n>Save action</button>
+          </div>
+        </fieldset>
+      </form>
+      <p id="action-status" class="detail" role="status"></p>
+    </div>
+    <details id="instruction-settings" class="card disclosure">
+      <summary id="instruction-list-label" class="title" data-i18n>Additional instructions</summary>
+      <div class="field">
+        <div id="instruction-picker">
+          <p class="detail" data-i18n>These instructions are added to the action you choose. Check any to include them by default.</p>
+          <ul id="instruction-list" aria-labelledby="instruction-list-label" hidden></ul>
+          <button id="add-instruction" type="button" class="chip" data-i18n disabled>Add instruction</button>
+        </div>
+        <form id="instruction-editor" hidden autocomplete="off">
+          <fieldset>
+            <div class="instruction-field">
+              <label for="instruction-kind" class="title" data-i18n>Use with</label>
+              <select id="instruction-kind" required>
+                <option value="reply" data-i18n>Share a reply</option>
+                <option value="prompt" data-i18n>Share my prompt</option>
+                <option value="review" data-i18n>Cross-review</option>
+              </select>
+            </div>
+            <div class="instruction-field">
+              <label for="instruction-title" class="title" data-i18n>Instruction name</label>
+              <input id="instruction-title" type="text" required>
+            </div>
+            <div class="instruction-field">
+              <label for="instruction-text" class="title" data-i18n>What should the AI do?</label>
+              <textarea id="instruction-text" rows="3" required></textarea>
+            </div>
+            <label class="instruction-default"><input id="instruction-default" type="checkbox" checked><span data-i18n>Use by default</span></label>
+            <div class="instruction-buttons">
+              <button type="button" id="remove-instruction" class="text-button" data-i18n hidden>Delete instruction</button>
+              <button type="button" id="cancel-instruction" class="text-button" data-i18n>Cancel</button>
+              <button type="submit" class="primary" data-i18n>Save instruction</button>
+            </div>
+          </fieldset>
+        </form>
+        <p id="instruction-status" class="detail" role="status"></p>
+      </div>
+    </details>
+    <details id="template-settings" class="card disclosure">
+      <summary class="title" data-i18n>Message templates</summary>
+      <form id="share-settings">
+        <div class="row template-choice">
+          <label for="share-kind" data-i18n>Message for</label>
+          <select id="share-kind" disabled>
+            <option value="conversation" data-i18n>Selected messages</option>
+            <option value="comparison" data-i18n>Compare</option>
+            <option value="reviewCommon" data-i18n>Instructions for all cross-reviews</option>
+          </select>
+        </div>
+        <div class="field">
+          <div class="field-head"><label id="message-label" for="share-message" class="title" data-i18n>Message with selected messages</label><span id="count" class="detail" aria-live="off"></span></div>
+          <textarea id="share-message" rows="6" maxlength="4000" spellcheck="true" disabled></textarea>
+          <div class="field-foot">
+            <span id="template-hint" class="detail" data-i18n>Insert</span>
+            <button type="button" id="assistant-placeholder" class="tag" data-insert="{assistant}" title="The assistant’s name, such as ChatGPT" data-i18n-title disabled>{assistant}</button>
+            <button type="button" id="content-placeholder" class="tag" data-insert="{reply}" title="The shared text. Without it, the text goes at the end" data-i18n-title disabled>{reply}</button>
+            <button type="button" id="reset-message" class="text-button" data-i18n disabled>Reset</button>
+          </div>
+        </div>
+      </form>
+    </details>
+    <p id="saved" class="saved" role="status" aria-live="polite"></p>
+  </section>
+
   <section id="pair-section" hidden>
     <h2 data-i18n>Split View</h2>
     <button type="button" id="pair-last" class="chip" hidden></button>
@@ -54,42 +164,6 @@
   </section>
 
   <section>
-    <h2 data-i18n>Sharing</h2>
-    <form id="share-settings" class="card">
-      <div class="row">
-        <label for="send-now" class="grow"><span class="title" data-i18n>Send right away</span><span id="mode-detail" class="detail" data-i18n>Send shared messages, comparisons and cross-reviews immediately.</span></label>
-        <input id="send-now" type="checkbox" role="switch" class="switch" disabled>
-      </div>
-      <div class="row template-choice">
-        <label for="share-kind" data-i18n>Message for</label>
-        <select id="share-kind" disabled>
-          <option value="reply" data-i18n>Replies</option>
-          <option value="prompt" data-i18n>My prompts</option>
-          <option value="conversation" data-i18n>Selected messages</option>
-          <option value="comparison" data-i18n>Compare</option>
-          <optgroup label="Cross-review" data-i18n-label>
-            <option value="reviewCommon" data-i18n>All review modes</option>
-            <option value="critique" data-i18n>Critique</option>
-            <option value="errors" data-i18n>Find errors</option>
-            <option value="improvements" data-i18n>Suggest improvements</option>
-          </optgroup>
-        </select>
-      </div>
-      <div class="field">
-        <div class="field-head"><label id="message-label" for="share-message" class="title" data-i18n>Message with the shared reply</label><span id="count" class="detail" aria-live="off"></span></div>
-        <textarea id="share-message" rows="6" maxlength="4000" spellcheck="true" disabled></textarea>
-        <div class="field-foot">
-          <span id="template-hint" class="detail" data-i18n>Insert</span>
-          <button type="button" id="assistant-placeholder" class="tag" data-insert="{assistant}" title="The assistant’s name, such as ChatGPT" data-i18n-title disabled>{assistant}</button>
-          <button type="button" id="content-placeholder" class="tag" data-insert="{reply}" title="The shared text. Without it, the text goes at the end" data-i18n-title disabled>{reply}</button>
-          <button type="button" id="reset-message" class="text-button" data-i18n disabled>Reset</button>
-        </div>
-      </div>
-    </form>
-    <p id="saved" class="saved" role="status" aria-live="polite"></p>
-  </section>
-
-  <section>
     <h2 data-i18n>Language</h2>
     <div class="card">
       <div class="row template-choice">
@@ -103,10 +177,12 @@
     </div>
   </section>
 
-  <footer data-i18n-rich><b>Send both</b> sits beside each chat’s Send button. <b>Share with…</b> sits beside Copy. Use <b>Select messages…</b> in the composer’s arrow menu to share several messages together.</footer>
+  <footer data-i18n-rich>In Split View, click the other assistant’s name beside <b>Copy</b> to share a message and its supported files. Use the arrow to choose or add an action, change chats, or leave files out.</footer>
   <script src="i18n.js"></script>
   <script src="i18n-zh-CN.js"></script>
   <script type="module" src="popup.js"></script>
+  <script type="module" src="popup-actions.js"></script>
+  <script type="module" src="popup-instructions.js"></script>
   <script type="module" src="popup-reading.js"></script>
 </body>
 </html>

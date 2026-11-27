@@ -1,11 +1,11 @@
 import './i18n.js';
-import { PROVIDERS } from './providers.js';
-import { composeComparison, REVIEW_TEMPLATES } from './settings.js';
+import { PROVIDERS, providerFor } from './providers.js';
+import { composeComparison } from './settings.js';
 
 const i18n = globalThis.AISplitI18n;
 const { t, list } = i18n;
 // Menus are identified by their English names; these are the names shown to the user.
-const menuName = menu => menu === 'Cross-review' ? t('Cross-review') : t('Compare');
+const menuName = menu => menu === 'Share' ? t('Share') : menu === 'Cross-review' ? t('Cross-review') : t('Compare');
 const paneLabel = ({ name, side }) => side === 'left' ? t('{name} (left pane)', { name }) : t('{name} (right pane)', { name });
 
 const MAX_TARGETS = 8;
@@ -20,9 +20,9 @@ export function createBridge(api, manager, { retryDelay = 500, retryLimit = 40 }
     try { return await action(); } finally { busyWindows.delete(windowId); }
   }
 
-  async function ask(tabId, type, payload = {}) {
+  async function ask(tabId, type, payload = {}, documentId) {
     let result;
-    try { result = await api.tabs.sendMessage(tabId, { type, ...payload }, { frameId: 0 }); }
+    try { result = await api.tabs.sendMessage(tabId, { type, ...payload }, { frameId: 0, ...(documentId && { documentId }) }); }
     catch { throw Object.assign(new Error(t('Chat connection unavailable. Refresh that AI tab after installing or updating the extension.')), { retry: true }); }
     if (!result?.ok) throw Object.assign(new Error(result?.error || t('The chat did not accept the action.')), { retry: !!result?.retry });
     return result;
@@ -109,35 +109,69 @@ export function createBridge(api, manager, { retryDelay = 500, retryLimit = 40 }
   }
 
   // One destination, one staged transaction, at most one native Send click.
-  async function deliver(sourceId, tabId, text, expect, { files = [], send = true, answer, verifyTarget, keepIfSendMissing = false } = {}) {
+  async function deliver(sourceId, tabId, text, expect, { files = [], send = true, answer, verifyTarget, keepIfSendMissing = false, documentId } = {}) {
     const requestId = crypto.randomUUID();
     const payload = { requestId, text, source: false, attachments: files.length };
+    const target = (type, data) => ask(tabId, type, data, documentId);
     try {
       for (let attempt = 1; ; attempt++) {
-        try { await ask(tabId, 'ASB_PREPARE', { ...payload, ...expect, ...(answer && { answer }), ...(!send && { draftOnly: true }) }); break; }
+        try { await target('ASB_PREPARE', { ...payload, ...expect, ...(answer && { answer }), ...(!send && { draftOnly: true }) }); break; }
         catch (error) {
           // Only a pane that was just opened is worth waiting for.
-          if (!expect || !error.retry || attempt >= retryLimit) throw error;
+          if (!expect?.provider || !error.retry || attempt >= retryLimit) throw error;
           await new Promise(resolve => setTimeout(resolve, retryDelay));
         }
       }
-      await ask(tabId, 'ASB_STAGE', { ...payload, ...(files.length ? { files } : {}) });
-      await ask(tabId, 'ASB_VALIDATE', { ...payload, ...(keepIfSendMissing && { keepIfSendMissing }) });
+      await target('ASB_STAGE', { ...payload, ...(files.length ? { files } : {}) });
+      await target('ASB_VALIDATE', { ...payload, ...(keepIfSendMissing && { keepIfSendMissing }) });
       if (verifyTarget) await verifyTarget();
       else chosen(await manager.context(sourceId), [tabId]);
       if (!send) {
-        await ask(tabId, 'ASB_KEEP', { requestId });
+        await target('ASB_KEEP', { requestId });
         return;
       }
     } catch (error) {
-      const cleanup = await ask(tabId, 'ASB_CANCEL', { requestId }).catch(() => null);
+      const cleanup = await target('ASB_CANCEL', { requestId }).catch(() => null);
       throw new Error(cleanup?.leftAttachments
         ? t('Nothing was sent. {error} Remove the copied attachments still in that chat.', { error: error.message })
         : t('Nothing was sent. {error}', { error: error.message }));
     }
-    try { return await ask(tabId, 'ASB_COMMIT', { requestId }); }
+    try { return await target('ASB_COMMIT', { requestId }); }
     catch (error) { throw new Error(t('{error} Delivery is unconfirmed; check that chat before sending again.', { error: error.message })); }
-    finally { await ask(tabId, 'ASB_CANCEL', { requestId }).catch(() => {}); }
+    finally { await target('ASB_CANCEL', { requestId }).catch(() => {}); }
+  }
+
+  async function summarize(source, text, { send, page, documentId }) {
+    if (typeof send !== 'boolean') throw new Error(t('Unsupported request.'));
+    if (page !== source.url) throw new Error(t('The chat changed. Refresh and try again.'));
+    validateText(text);
+    const verifyTarget = async () => {
+      const current = await manager.supported(source.id);
+      if (current.url !== page || current.windowId !== source.windowId) {
+        throw new Error(t('The chat changed. Refresh and try again.'));
+      }
+    };
+    await deliver(source.id, source.id, text, { expectedUrl: page }, { send, documentId, verifyTarget });
+    return { ok: true, message: send
+      ? t('Summary requested in this chat. Share the reply as context when it is ready.')
+      : t('Summary request added as a draft. Review it, then click Send in this chat.') };
+  }
+
+  // Quick sharing is bound to the displayed peer. Never open, move, or substitute a tab.
+  async function shareWithPeer(sourceId, choice, text, { files, send, verifyMode }) {
+    validateFiles(files);
+    validateText(text, { allowEmpty: files.length > 0 });
+    const pair = await splitPair(sourceId, choice, 'Share');
+    if (pair[0].url !== choice.page) throw new Error(t('The chat changed. Refresh and try again.'));
+    const peer = pair[1];
+    const verifyTarget = () => Promise.all([verifyPair(pair, choice, 'Share'), verifyMode()]);
+    const result = await deliver(sourceId, peer.id, text, { expectedUrl: peer.url }, {
+      files, send, verifyTarget, keepIfSendMissing: send && choice.peerProvider === 'gemini' && !files.length,
+    });
+    if (!send) return { ok: true, message: t('Draft added to {name}. Review it, then send it there.', { name: peer.name }) };
+    return { ok: true, message: result.status === 'draft'
+      ? t('Your shared text is ready in Gemini. Click Send in Gemini to submit it.')
+      : t('Sent to {chats}.', { chats: peer.name }) };
   }
 
   async function share(sourceId, { targetId, provider } = {}, text, { send = false, files = [] } = {}) {
@@ -179,7 +213,7 @@ export function createBridge(api, manager, { retryDelay = 500, retryLimit = 40 }
       : t('{name} is on the right with the draft ready. Review it, then send it there.', { name }) };
   }
 
-  async function comparisonPair(sourceId, { peerId, peerProvider }, menu) {
+  async function splitPair(sourceId, { peerId, peerProvider }, menu) {
     const state = await manager.context(sourceId);
     if (!state.native || !state.peer) throw new Error(t('Open two supported AI chats in Chrome Split View to use {menu}.', { menu: menuName(menu) }));
     if (state.peer.id !== peerId || (peerProvider && state.peer.provider !== peerProvider)) {
@@ -187,7 +221,7 @@ export function createBridge(api, manager, { retryDelay = 500, retryLimit = 40 }
     }
     chosen(state, [peerId]);
     const peer = await manager.supported(peerId);
-    if (peer.splitViewId !== state.source.splitViewId || peer.windowId !== state.source.windowId) {
+    if (peer.splitViewId !== state.source.splitViewId || peer.windowId !== state.source.windowId || providerFor(peer.url) !== state.peer.provider) {
       throw new Error(t('The split changed. Open {menu} again.', { menu: menuName(menu) }));
     }
     return [state.source, peer].map((tab, index) => ({
@@ -203,7 +237,7 @@ export function createBridge(api, manager, { retryDelay = 500, retryLimit = 40 }
 
   async function compareStatus(sourceId, choice, menu = 'Compare') {
     try {
-      const pair = await comparisonPair(sourceId, choice, menu);
+      const pair = await splitPair(sourceId, choice, menu);
       const [statuses, reviews] = await Promise.all([
         Promise.all(pair.map(chat => ask(chat.id, 'ASB_COMPARE_STATUS'))),
         menu === 'Cross-review' ? reviewResults(pair, { read: false }) : [],
@@ -233,16 +267,20 @@ export function createBridge(api, manager, { retryDelay = 500, retryLimit = 40 }
     return answers;
   }
 
-  async function verifyAnswers(pair, choice, answers, menu) {
-    const current = await comparisonPair(pair[0].id, choice, menu);
+  async function verifyPair(pair, choice, menu) {
+    const current = await splitPair(pair[0].id, choice, menu);
     if (current.some((chat, i) => chat.url !== pair[i].url || chat.split !== pair[i].split || chat.windowId !== pair[i].windowId || chat.side !== pair[i].side)) {
       throw new Error(t('The split changed. Open {menu} again.', { menu: menuName(menu) }));
     }
+  }
+
+  async function verifyAnswers(pair, choice, answers, menu) {
+    await verifyPair(pair, choice, menu);
     await Promise.all(pair.map((chat, i) => ask(chat.id, 'ASB_COMPARE_CHECK', answers[i])));
   }
 
   async function compare(sourceId, choice, settings) {
-    const pair = await comparisonPair(sourceId, choice, 'Compare');
+    const pair = await splitPair(sourceId, choice, 'Compare');
     const reviewer = pair.findIndex(chat => chat.id === choice.targetId);
     if (reviewer < 0) throw new Error(t('Choose one of the two chats in this split to compare the answers.'));
     const answers = await readAnswers(pair, choice.turns, 'Compare');
@@ -263,13 +301,12 @@ export function createBridge(api, manager, { retryDelay = 500, retryLimit = 40 }
     }
   }
 
-  async function crossReview(sourceId, choice, action, settings) {
-    if (typeof action !== 'string' || !Object.hasOwn(REVIEW_TEMPLATES, action)) throw new Error(t('Choose Critique, Find errors, or Suggest improvements.'));
+  async function crossReview(sourceId, choice, prompt, settings, extra = '') {
     requireReviewTurns(choice.turns);
-    const pair = await comparisonPair(sourceId, choice, 'Cross-review');
+    const pair = await splitPair(sourceId, choice, 'Cross-review');
     const answers = await readAnswers(pair, choice.turns, 'Cross-review');
     const reviewId = crypto.randomUUID();
-    const instructions = [settings.reviewGuidance, settings[REVIEW_TEMPLATES[action].key]]
+    const instructions = [settings.reviewGuidance, prompt, extra]
       .map(value => value.trim().replace(/\r\n?/g, '\n')).filter(Boolean).join('\n\n') + '\n\n';
     const prompts = pair.map((_, i) => {
       const peer = pair[1 - i];
@@ -288,15 +325,15 @@ export function createBridge(api, manager, { retryDelay = 500, retryLimit = 40 }
       verify: () => verifyAnswers(pair, choice, answers, 'Cross-review'),
     });
     if (!result.partial) result.message = sendNow
-      ? t('Cross-review sent to both chats. Each critique will appear in its own pane.')
-      : t('Review drafts are ready in both panes. Send each draft to receive its critique.');
+      ? t('Cross-review sent to both chats.')
+      : t('Cross-review drafts are ready in both panes.');
     return result;
   }
 
   async function revise(sourceId, choice, reviewId, settings) {
     requireReviewTurns(choice.turns);
     if (typeof reviewId !== 'string' || !reviewId || reviewId.length > 160) throw new Error(t('Open a completed Cross-review to revise an answer.'));
-    const pair = await comparisonPair(sourceId, choice, 'Cross-review');
+    const pair = await splitPair(sourceId, choice, 'Cross-review');
     const i = pair.findIndex(chat => chat.id === choice.targetId);
     if (i < 0) throw new Error(t('Choose the answer to revise in one of these two chats.'));
     const reviews = await reviewResults(pair, { read: true, reviewId });
@@ -331,7 +368,7 @@ export function createBridge(api, manager, { retryDelay = 500, retryLimit = 40 }
     return { ok: true, message };
   }
 
-  return { send, share, show, compare, compareStatus, crossReview, revise, locked };
+  return { send, share, shareWithPeer, summarize, show, compare, compareStatus, crossReview, revise, locked };
 }
 
 export function validateText(text, { allowEmpty = false } = {}) {

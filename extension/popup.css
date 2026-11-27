@@ -16,6 +16,7 @@
 }
 * { box-sizing: border-box; }
 body { width: 360px; margin: 0; padding: 16px 16px 14px; }
+.editor-tab body { width: min(100%, 440px); margin-inline: auto; }
 [hidden] { display: none !important; }
 p { margin: 0; }
 button, select, input, textarea { font: inherit; color: inherit; }
@@ -86,7 +87,65 @@ textarea:focus { outline: none; border-color: color-mix(in srgb, var(--fg) 35%, 
 .tag:hover { background: color-mix(in srgb, var(--fg) 10%, transparent); }
 .text-button { margin-left: auto; height: 26px; padding: 0 6px; border: 0; border-radius: 8px; background: none; color: var(--muted); font-size: 12.5px; }
 .text-button:hover { color: var(--fg); background: var(--hover); }
-.saved { min-height: 18px; margin: 6px 2px 0; color: var(--faint); font-size: 12px; }
+.saved:not(:empty) { margin: 6px 2px 0; color: var(--muted); font-size: 12px; }
+
+.disclosure { margin-top: 8px; }
+.disclosure > summary { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 12px 14px; border-radius: inherit; cursor: pointer; }
+.disclosure > summary::-webkit-details-marker { display: none; }
+.disclosure > summary::after { content: ''; width: 6px; height: 6px; margin-inline-end: 3px; border: solid var(--muted); border-width: 0 1.5px 1.5px 0; transform: rotate(45deg); }
+.disclosure[open] > summary::after { transform: rotate(225deg); }
+.disclosure > summary:hover { background: var(--hover); }
+.disclosure[open] > summary + * { border-top: 1px solid var(--line); }
+#instruction-list { padding: 0; margin: 8px 0 0; list-style: none; max-height: 172px; overflow-y: auto; }
+#instruction-list li, .instruction-default { display: flex; align-items: center; gap: 6px; }
+#instruction-list li + li { border-top: 1px solid var(--line); }
+.instruction-default { width: fit-content; min-height: 32px; cursor: pointer; }
+.instruction-toggle { flex: none; display: grid; width: 32px; min-height: 44px; place-items: center; cursor: pointer; }
+#instruction-list input, .instruction-default input { flex: none; width: 16px; height: 16px; margin: 0; accent-color: var(--primary); cursor: pointer; }
+#instruction-list button {
+  display: flex; flex: 1; min-width: 0; align-items: center; justify-content: space-between; gap: 8px; min-height: 44px; padding: 6px 8px; border: 0; border-radius: 8px;
+  background: none; text-align: left; overflow-wrap: anywhere;
+}
+.instruction-edit { flex: none; font-size: 12px; color: var(--muted); }
+#instruction-list button:hover { background: var(--hover); }
+#add-instruction { margin-top: 10px; }
+#instruction-editor fieldset, #action-editor fieldset { display: grid; gap: 10px; padding: 0; margin: 0; min-width: 0; border: 0; }
+.instruction-field { display: grid; gap: 4px; min-width: 0; }
+.instruction-field input, .instruction-field select {
+  width: 100%; min-height: 36px; padding-inline-start: 10px; border: 1px solid var(--line-strong); border-radius: 10px; background-color: transparent;
+}
+.instruction-field textarea { min-height: 80px; }
+.instruction-buttons { display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+.instruction-buttons .text-button { margin-left: 0; height: 36px; padding-inline: 8px; }
+#remove-instruction, #delete-action { margin-inline-end: auto; color: var(--danger); }
+#instruction-status:not(:empty) { margin-top: 8px; }
+#instruction-status.error { color: var(--danger); }
+
+
+#action-settings { margin-top: 8px; }
+.action-head, #action-list li { display: flex; align-items: center; gap: 8px; }
+.action-head { justify-content: space-between; }
+.action-head h3 { margin: 0; font-size: 14px; font-weight: 600; }
+#add-action { height: 30px; padding: 0 12px; }
+.kind-tabs { display: flex; min-width: 0; padding: 2px; border: 0; margin: 10px 0; border-radius: 11px; background: var(--hover); }
+.kind-tabs label { position: relative; flex: 1; min-width: 0; text-align: center; }
+.kind-tabs input { position: absolute; opacity: 0; inset: 0; width: 100%; height: 100%; margin: 0; cursor: pointer; }
+.kind-tabs span { display: block; padding: 6px 1px; font-size: 12.5px; border: 1px solid transparent; border-radius: 9px; color: var(--muted); }
+.kind-tabs input:checked + span { background: var(--bg); border-color: var(--line-strong); color: var(--fg); font-weight: 600; }
+.kind-tabs input:focus-visible + span { outline: 2px solid var(--muted); }
+.kind-tabs:disabled input { cursor: default; }
+#action-picker { border: 0; margin: 0; padding: 0; min-width: 0; }
+#action-list { list-style: none; padding: 0; margin: 6px 0 0; max-height: 184px; overflow-y: auto; }
+#action-list li + li { border-top: 1px solid var(--line); }
+#action-list label { display: flex; flex: 1; align-items: center; gap: 9px; min-width: 0; min-height: 39px; cursor: pointer; overflow-wrap: anywhere; }
+#action-list input { flex: none; margin: 0 0 0 2px; accent-color: var(--primary); }
+#action-list .text-button { flex: none; min-height: 32px; }
+#action-editor textarea { min-height: 100px; }
+#action-title:read-only { color: var(--muted); background: var(--hover); }
+#action-hint { margin-top: 2px; }
+#reset-action { margin-inline-end: auto; }
+#action-status:not(:empty) { margin-top: 6px; }
+#action-status.error { color: var(--danger); }
 
 footer { padding-top: 12px; border-top: 1px solid var(--line); color: var(--faint); font-size: 12px; line-height: 1.5; }
 footer b { color: var(--muted); font-weight: 500; }

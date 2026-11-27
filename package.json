@@ -1,6 +1,6 @@
 {
   "name": "ai-split-bridge",
-  "version": "0.10.3",
+  "version": "0.12.1",
   "private": true,
   "type": "module",
   "description": "Small, local Chrome extension for collaboration in native Split View.",

@@ -41,6 +41,10 @@ test('Chinese Gemini exposes Share for both speakers and transfers the chosen me
   window.HTMLElement.prototype.getClientRects = () => [{ width: 100, height: 32 }];
   const peer = { id: 2, provider: 'claude', name: 'Claude', side: 'left' };
   const shares = [];
+  const actions = [
+    { id: 'compare-costs', kind: 'reply', title: '核对成本', isDefault: false, builtin: false },
+    { id: 'rewrite', kind: 'prompt', title: '改写问题', isDefault: false, builtin: false },
+  ];
   const doc = window.document;
   const promptActions = doc.querySelector('.luminous-actions-container');
   const answerActions = doc.querySelector('.response-container-footer');
@@ -52,10 +56,10 @@ test('Chinese Gemini exposes Share for both speakers and transfers the chosen me
     id: 'extension', onMessage: { addListener() {} },
     async sendMessage(message) {
       if (message.type === 'ASB_CONTEXT') {
-        return { ok: true, selfId: 1, provider: 'gemini', side: 'right', native: true, peer, chats: [peer], closed: [], shareMode: 'draft' };
+        return { ok: true, selfId: 1, provider: 'gemini', side: 'right', native: true, peer, actions, chats: [peer], closed: [], shareMode: 'draft' };
       }
       assert.equal(message.type, 'ASB_SHARE');
-      shares.push({ ...message });
+      shares.push(structuredClone(message));
       return { ok: true, message: 'Draft added to Claude.' };
     },
   } };
@@ -82,14 +86,26 @@ test('Chinese Gemini exposes Share for both speakers and transfers the chosen me
     const controls = doc.querySelectorAll(`${turn} [data-ai-split-bridge="share"][data-share-role="${role}"]`);
     assert.equal(controls.length, 1, `one Share control under the ${role} turn`);
     assert.equal(controls[0].style.display, 'inline-flex');
-    controls[0].shadowRoot.querySelector('.share-button').click();
+    controls[0].shadowRoot.querySelector('.share-primary').click();
     await settle();
-    assert.equal(menu.hidden, false);
-    const reviewer = [...menu.querySelectorAll('button.row')].find(button => button.querySelector('.name')?.textContent === 'Claude');
-    assert.ok(reviewer);
-    assert.equal(shares.length, index, 'opening the picker does not transfer text');
-    reviewer.click();
+    assert.equal(menu.hidden, true, 'one press shares to the visible peer');
+    assert.deepEqual(shares[index], {
+      type: 'ASB_SHARE', targetId: peer.id, peerId: peer.id, peerProvider: 'claude',
+      expectedMode: 'draft', page: window.location.href, ...payload,
+    });
+  }
+  for (const [control, action, payload] of [
+    [answerControl, actions[0], cases[1].payload], [promptControl, actions[1], cases[0].payload],
+  ]) {
+    control.shadowRoot.querySelector('.share-options').click();
     await settle();
-    assert.deepEqual(shares[index], { type: 'ASB_SHARE', targetId: peer.id, ...payload });
+    const rows = [...menu.querySelectorAll('[data-action-id]')];
+    assert.deepEqual(rows.map(row => row.textContent), [action.title]);
+    rows[0].click();
+    await settle();
+    assert.deepEqual(shares.at(-1), {
+      type: 'ASB_SHARE', expectedMode: 'draft', targetId: peer.id, peerId: peer.id, peerProvider: 'claude',
+      page: window.location.href, actionId: action.id, ...payload, instructionIds: [],
+    });
   }
 });

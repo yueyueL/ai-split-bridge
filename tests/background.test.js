@@ -1,5 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { INSTRUCTIONS_KEY } from '../extension/instructions.js';
+import { ACTIONS_KEY, changeAction } from '../extension/actions.js';
 import { mockChrome, chatTabs } from './mock-chrome.js';
 
 async function load(t, tabs, options) {
@@ -114,6 +116,36 @@ test('popup-only actions are refused from chat pages and unknown pages', async t
   assert.equal(list.peer.id, 2);
   const foreign = await request({ type: 'ASB_LIST' }, { ...popup, id: 'another-extension' });
   assert.equal(foreign.ok, false);
+});
+
+test('Add action opens the popup on the selected workflow once and leaves both chats alone', async t => {
+  const { model, request } = await load(t, chatTabs());
+  const popup = { id: 'test-extension', url: model.api.runtime.getURL('popup.html') };
+  let opened = 0;
+  model.api.action = { async openPopup({ windowId }) {
+    assert.equal(windowId, 1);
+    ++opened;
+  } };
+  assert.equal((await request({ type: 'ASB_OPEN_ACTION_EDITOR', kind: 'review' })).ok, true);
+  assert.deepEqual(await request({ type: 'ASB_ACTION_EDITOR_CONTEXT' }, popup), { ok: true, kind: 'review' });
+  assert.deepEqual(await request({ type: 'ASB_ACTION_EDITOR_CONTEXT' }, popup), { ok: true, kind: null });
+  assert.equal((await request({ type: 'ASB_OPEN_ACTION_EDITOR', kind: 'comparison' })).ok, false);
+  assert.equal(opened, 1);
+  assert.equal(model.messages().length, 0);
+});
+
+test('if the toolbar popup cannot open, Add action opens the extension’s editor in the same window', async t => {
+  const { model, request } = await load(t, chatTabs());
+  model.api.action = { async openPopup() { throw new Error('Popup unavailable'); } };
+  assert.equal((await request({ type: 'ASB_OPEN_ACTION_EDITOR', kind: 'prompt' })).ok, true);
+  const editor = [...model.data.values()].at(-1);
+  assert.equal(editor.url, model.api.runtime.getURL('popup.html?addAction=prompt'));
+  assert.equal(editor.windowId, 1);
+  const from = { id: 'test-extension', frameId: 0, url: editor.url, tab: editor };
+  assert.equal((await request({ type: 'ASB_LIST' }, from)).ok, true);
+  assert.deepEqual(await request({ type: 'ASB_ACTION_EDITOR_CONTEXT' }, from), { ok: true, kind: null });
+  assert.equal((await request({ type: 'ASB_LIST' }, { ...from, url: from.url + 'extra' })).ok, false);
+  assert.equal(model.messages().length, 0);
 });
 
 function comparePages(model) {
@@ -447,7 +479,8 @@ test('with Chinese saved, shared text, review prompts and results are all writte
   model.respond = reviewPages(model);
   model.calls.length = 0;
   const review = await request(crossChoice);
-  assert.equal(review.message, '互评已发送到两个聊天。每份点评会出现在各自的窗格中。');
+  assert.equal(review.message, globalThis.AISplitI18n.t('Cross-review sent to both chats.'));
+  assert.match(review.message, /互评/);
   for (const { args: [id, payload] } of model.messages('ASB_PREPARE')) {
     assert.match(payload.text, /^请就事论事地点评下面的回答。/);
     assert.equal(payload.text.slice(payload.review.quotedStart), `${id === 1 ? 'Claude（右侧窗格）' : 'ChatGPT（左侧窗格）'}的回答\nIndependent answer from pane ${3 - id}.`);
@@ -650,4 +683,223 @@ test('with no usable pair remembered there is nothing to open', async t => {
   }
   const chinese = await load(t, [{ id: 1 }], { sync: { language: 'zh-CN' } });
   assert.equal((await chinese.request(pairLast, popupSender)).error, '请先在这个弹窗里创建一次分屏，之后它会记住那个组合。');
+});
+
+test('sharing stacks saved and one-time instructions while exposing only library labels in the menu', async t => {
+  const { model, request } = await load(t, chatTabs(), { sync: { settings: {
+    shareMode: 'draft', shareMessage: 'Start with {reply}', promptMessage: 'Prompt: {content}',
+  } } });
+  const presets = [
+    { id: 'one', kind: 'reply', title: 'Review sources', text: 'Which claims lack evidence?' },
+    { id: 'two', kind: 'reply', title: 'Keep notation', text: 'Keep {reply} written as it is.' },
+    { id: 'three', kind: 'prompt', title: 'Explain the approach', text: 'Give a worked example.' },
+  ];
+  model.api.storage.local = { async get(key) {
+    return key === INSTRUCTIONS_KEY ? { [key]: structuredClone(presets) } : {};
+  } };
+  const context = await request({ type: 'ASB_CONTEXT' });
+  assert.deepEqual(context.instructions, presets.map(({ id, title, kind }) => ({ id, title, kind, useByDefault: false })));
+
+  const share = { type: 'ASB_SHARE', targetId: 2, reply: 'A short answer.' };
+  let result = await request({ ...share, instructionIds: ['two', 'one'], instructionText: 'Keep {assistant} literal.' });
+  assert.equal(result.ok, true, result.error);
+  assert.equal(model.messages('ASB_INSERT').at(-1).args[1].text, [
+    'Start with A short answer.', 'Additional instructions', presets[0].text, presets[1].text, 'Keep {assistant} literal.',
+  ].join('\n\n'));
+
+  result = await request({ ...share, kind: 'prompt', reply: 'How?', instructionIds: ['three'] });
+  assert.equal(result.ok, true, result.error);
+  assert.equal(model.messages('ASB_INSERT').at(-1).args[1].text, 'Prompt: How?\n\nAdditional instructions\n\nGive a worked example.');
+  assert.equal(model.messages('ASB_COMMIT').length, 0);
+  for (const id of ['removed', 'three']) {
+    result = await request({ ...share, instructionIds: [id] });
+    assert.equal(result.ok, false);
+    assert.match(result.error, /saved instruction changed/);
+  }
+  assert.equal(model.messages('ASB_INSERT').length, 2);
+});
+
+test('cross-review applies the same stacked instructions to both sides and still tracks the peer quotation', async t => {
+  const { model, request } = await load(t, chatTabs(), { sync: { settings: {
+    shareMode: 'draft', reviewGuidance: 'Base review guidance.', critiqueMessage: 'Base critique instruction.',
+  } } });
+  const presets = [
+    { id: 'different', kind: 'review', title: 'Disagreements', text: 'Name one disagreement.' },
+    { id: 'sources', kind: 'review', title: 'References', text: 'Check each reference unchanged.' },
+  ];
+  model.api.storage.local = { async get(key) { return { [key]: presets }; } };
+  model.respond = comparePages(model);
+
+  const result = await request({
+    type: 'ASB_CROSS_REVIEW', peerId: 2, peerProvider: 'claude', action: 'critique', turns: ['turn-1', 'turn-2'],
+    expectedMode: 'draft', instructionIds: ['sources', 'different'], instructionText: 'Keep {content} literal.',
+  });
+  assert.equal(result.ok, true, result.error);
+  const intro = ['Base review guidance.', 'Base critique instruction.', 'Additional instructions', ...presets.map(preset => preset.text), 'Keep {content} literal.', ''].join('\n\n');
+  const stages = model.messages('ASB_STAGE').map(call => call.args[1]);
+  assert.deepEqual(stages.map(({ text }) => text), [
+    intro + 'Answer from Claude (right pane)\nIndependent answer from pane 2.',
+    intro + 'Answer from ChatGPT (left pane)\nIndependent answer from pane 1.',
+  ]);
+  assert.deepEqual(model.messages('ASB_PREPARE').map(call => call.args[1].review.quotedStart), [intro.length, intro.length]);
+  assert.equal(model.messages('ASB_KEEP').length, 2);
+  assert.equal(model.messages('ASB_COMMIT').length, 0);
+});
+
+const quickShare = {
+  type: 'ASB_SHARE', targetId: 2, peerId: 2, peerProvider: 'claude',
+  expectedMode: 'send', page: 'https://chatgpt.com/c/one', reply: 'Here are my findings.',
+};
+
+test('one-click sharing applies current defaults, respects draft mode and delivers only to the displayed peer', async t => {
+  const { model, request } = await load(t, chatTabs(), { sync: { settings: { shareMessage: '{reply}' } } });
+  const presets = [
+    { id: 'enabled', kind: 'reply', text: 'Check the evidence.', title: 'Evidence', useByDefault: true },
+    { id: 'legacy', kind: 'reply', text: 'Old optional instruction.', title: 'Optional' },
+    { id: 'prompt', kind: 'prompt', text: 'Work step by step.', title: 'Steps', useByDefault: true },
+  ];
+  model.api.storage.local = { async get(key) { return { [key]: presets }; } };
+  let result = await request(quickShare);
+  assert.equal(result.ok, true, result.error);
+  assert.deepEqual(model.messages('ASB_COMMIT').map(call => call.args[0]), [2]);
+  assert.equal(model.messages('ASB_STAGE').at(-1).args[1].text, 'Here are my findings.\n\nAdditional instructions\n\nCheck the evidence.');
+  presets[0].text = 'Use the latest saved wording.';
+  model.synced.settings.shareMode = 'draft';
+  result = await request({ ...quickShare, expectedMode: 'draft' });
+  assert.equal(result.ok, true, result.error);
+  assert.deepEqual(model.messages('ASB_KEEP').map(call => call.args[0]), [2]);
+  assert.equal(model.messages('ASB_PREPARE').at(-1).args[1].expectedUrl, 'https://claude.ai/chat/two');
+  assert.equal(model.messages('ASB_STAGE').at(-1).args[1].text.endsWith(presets[0].text), true);
+  assert.equal(model.messages('ASB_COMMIT').length, 1);
+});
+
+test('one-click sharing refuses a changed conversation, peer or send mode without opening or rearranging tabs', async t => {
+  const { model, request } = await load(t, [...chatTabs(), { id: 3, url: 'https://grok.com/c/third' }]);
+  for (const overrides of [
+    { peerId: 3 }, { targetId: 3 }, { targetId: 3, peerId: 3, peerProvider: 'grok' },
+    { page: 'https://chatgpt.com/c/previous' }, { expectedMode: 'draft' }, { peerProvider: 'gemini' },
+  ]) {
+    assert.equal((await request({ ...quickShare, ...overrides })).ok, false);
+  }
+  model.data.get(2).splitViewId = -1;
+  assert.equal((await request(quickShare)).ok, false);
+  assert.deepEqual(model.messages(), []);
+  assert.ok(model.calls.every(({ method }) => !['create', 'move', 'update', 'createSplit', 'unsplit'].includes(method)));
+});
+
+test('quick sharing checks the original peer, URL and delivery mode again after staging', async t => {
+  for (const change of [
+    model => { model.data.get(2).splitViewId = -1; },
+    model => { model.data.get(2).url = 'https://claude.ai/chat/elsewhere'; },
+    model => { model.data.get(1).url = 'https://chatgpt.com/c/elsewhere'; },
+    model => { model.synced.settings.shareMode = 'draft'; },
+  ]) {
+    const { model, request } = await load(t, chatTabs(), { sync: { settings: { shareMode: 'send' } } });
+    model.respond = (_id, message) => {
+      if (message.type === 'ASB_STAGE') change(model);
+      return { ok: true };
+    };
+    const result = await request(quickShare);
+    assert.equal(result.ok, false);
+    assert.equal(model.messages('ASB_CANCEL').length, 1);
+    assert.equal(model.messages('ASB_KEEP').length + model.messages('ASB_COMMIT').length, 0);
+  }
+});
+
+test('quick cross-review uses enabled review instructions on both sides', async t => {
+  const { model, request } = await load(t, chatTabs(), { sync: { settings: { shareMode: 'draft' } } });
+  model.api.storage.local = { async get(key) { return { [key]: [
+    { id: 'sources', kind: 'review', title: 'Sources', text: 'Check the original sources.', useByDefault: true },
+    { id: 'reply', kind: 'reply', title: 'Only for replies', text: 'Reply only.', useByDefault: true },
+  ] }; } };
+  model.respond = comparePages(model);
+  const result = await request({
+    type: 'ASB_CROSS_REVIEW', peerId: 2, peerProvider: 'claude', action: 'critique',
+    turns: ['turn-1', 'turn-2'], expectedMode: 'draft',
+  });
+  assert.equal(result.ok, true, result.error);
+  const stages = model.messages('ASB_STAGE').map(call => call.args[1].text);
+  assert.equal(stages.length, 2);
+  for (const text of stages) {
+    assert.match(text, /Check the original sources\./);
+    assert.doesNotMatch(text, /Reply only\./);
+  }
+});
+
+test('one-click sharing from the right pane keeps selected files and delivers only to the left chat', async t => {
+  const { model, request, sender } = await load(t, chatTabs());
+  const files = [{ name: 'notes.md', type: 'text/markdown', data: btoa('# Notes') }];
+  const result = await request({
+    ...quickShare, targetId: 1, peerId: 1, peerProvider: 'chatgpt', kind: 'prompt',
+    page: 'https://claude.ai/chat/two', reply: 'Review these notes.', files,
+  }, { ...sender, tab: { id: 2 }, url: 'https://claude.ai/chat/two' });
+  assert.equal(result.ok, true, result.error);
+  assert.deepEqual(model.messages('ASB_COMMIT').map(call => call.args[0]), [1]);
+  assert.deepEqual(model.messages('ASB_STAGE')[0].args[1].files, files);
+  assert.match(model.messages('ASB_STAGE')[0].args[1].text, /my prompt from a chat with Claude/);
+});
+
+test('named reply, prompt and cross-review actions replace the base prompt and resolve only in their workflow', async t => {
+  const { model, request } = await load(t, chatTabs(), { sync: { settings: {
+    shareMode: 'draft', shareMessage: 'Builtin reply template: {content}', promptMessage: 'Builtin prompt template: {content}',
+    critiqueMessage: 'Builtin critique.', reviewGuidance: 'Quote precise evidence.',
+  } } });
+  const stored = {};
+  const storage = model.api.storage;
+  storage.local = {
+    async get(key) { return { [key]: structuredClone(stored[key]) }; },
+    async set(values) { Object.assign(stored, structuredClone(values)); },
+  };
+  const add = async (kind, title, prompt) => (await changeAction(storage, { type: 'add', kind, title, prompt })).find(a => a.title === title);
+  const reply = await add('reply', 'Audit citations', 'Cross-check each source attributed to {assistant}.\n{content}');
+  const prompt = await add('prompt', 'Plan first', 'Outline a plan for this request.');
+  const review = await add('review', 'Find counterexamples', 'Construct a counterexample. Keep {content} literal.');
+  const context = await request({ type: 'ASB_CONTEXT' });
+  assert.deepEqual(context.actions.filter(a => !a.builtin), [reply, prompt, review].map(({ id, kind, title, builtin, isDefault }) => ({ id, kind, title, builtin, isDefault })));
+  assert.ok(context.actions.every(a => Object.keys(a).sort().join() === 'builtin,id,isDefault,kind,title'));
+  model.respond = comparePages(model);
+  const text = 'Original $1, {reply} and {assistant}';
+  const share = { type: 'ASB_SHARE', targetId: 2, reply: text, expectedMode: 'draft', prompt: 'untrusted prompt' };
+  assert.equal((await request({ ...share, actionId: reply.id })).ok, true);
+  assert.equal(model.messages('ASB_INSERT').at(-1).args[1].text, 'Cross-check each source attributed to ChatGPT.\n' + text);
+  await changeAction(storage, { type: 'default', kind: 'prompt', id: prompt.id });
+  assert.equal((await request({ ...share, kind: 'prompt' })).ok, true);
+  assert.equal(model.messages('ASB_INSERT').at(-1).args[1].text, prompt.prompt + '\n\n' + text);
+  assert.equal((await request({ ...share, kind: 'prompt', actionId: 'respond' })).ok, true);
+  assert.equal(model.messages('ASB_INSERT').at(-1).args[1].text, 'Builtin prompt template: ' + text);
+
+  await changeAction(storage, { type: 'default', kind: 'review', id: review.id });
+  const cross = { ...crossChoice, expectedMode: 'draft' };
+  delete cross.action;
+  for (const payload of [cross, { ...cross, actionId: review.id, action: 'critique' }]) {
+    const result = await request(payload);
+    assert.equal(result.ok, true);
+    assert.equal(result.message, 'Cross-review drafts are ready in both panes.');
+    for (const { args: [id, message] } of model.messages('ASB_PREPARE').slice(-2)) {
+      const peer = id === 1 ? 'Claude (right pane)' : 'ChatGPT (left pane)';
+      const body = 'Answer from ' + peer + '\nIndependent answer from pane ' + (3 - id) + '.';
+      assert.equal(message.text, 'Quote precise evidence.\n\n' + review.prompt + '\n\n' + body);
+      assert.equal(message.text.slice(message.review.quotedStart), body);
+    }
+  }
+  await changeAction(storage, { type: 'delete', kind: 'reply', id: reply.id });
+  const count = model.messages().length;
+  for (const wrong of [
+    { ...share, actionId: reply.id }, { ...share, actionId: prompt.id }, { ...share, actionId: null },
+    { ...share, actionId: 'review-reply', kind: 'handoff' }, { ...share, expectedMode: 'send' },
+    { ...cross, actionId: 'respond' },
+  ]) assert.equal((await request(wrong)).ok, false);
+  assert.equal(model.messages().length, count);
+});
+
+test('editing Share as context changes both the reply action and handoff sharing while retaining the original material', async t => {
+  const { model, request } = await load(t, chatTabs(), { sync: { settings: { shareMode: 'draft' } } });
+  await changeAction(model.api.storage, { type: 'edit', kind: 'reply', id: 'handoff', prompt: 'Continue this work from {assistant}.' });
+  const content = '    original("literal {content} and $1");\n  ';
+  for (const payload of [{ kind: 'reply', actionId: 'handoff' }, { kind: 'handoff' }]) {
+    const result = await request({ type: 'ASB_SHARE', targetId: 2, reply: content, ...payload });
+    assert.ok(result.ok, result.error);
+    assert.equal(model.messages('ASB_INSERT').at(-1).args[1].text, 'Continue this work from ChatGPT.\n\n' + content);
+  }
+  assert.equal(model.messages('ASB_COMMIT').length, 0);
 });

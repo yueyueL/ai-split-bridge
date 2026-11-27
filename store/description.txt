@@ -6,9 +6,9 @@ Use ChatGPT, Claude, Gemini and Grok in Chrome’s native Split View. Ask two as
 
 • Cross-review — With one click, each assistant critiques the other’s original answer. Choose Find errors or Suggest improvements for a more focused review. Read both critiques side by side, then pick an assistant to revise its answer if you want.
 
-• Set your review instructions — Give both assistants a shared rule, such as “Check the calculations and flag any assumptions.” You can also customize each review mode. Send reviews right away or open them as drafts to edit first.
+• Create your own actions — Add “Check citations” to Cross-review or “Extract next steps” to the reply menu. Give each action its own prompt, edit the built-in prompts, and choose a one-click default for each menu. Saved instructions can add rules across actions.
 
-• Share with… — Send your own prompt, an assistant’s reply or just a highlighted passage to another chat. Select several messages to share an exchange in order, and include supported files generated in replies.
+• Share to the other side — Click the other assistant’s name beside a reply or one of your own prompts. Supported prompt attachments and generated files go with the whole message. Use the arrow to change chats, adjust instructions, or leave files out. You can also share a highlighted passage or select several messages in order.
 
 • Switch chats — Choose which conversation appears on either side of the split and return to a previous conversation without rearranging your tabs.
 

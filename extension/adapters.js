@@ -328,19 +328,24 @@
   function composerEditor() {
     try { return provider === "gemini" ? getEditor() : firstMatch(config.editors); } catch { return null; }
   }
-  function remember(files) {
+  function remember(files, target) {
     if (injecting || !files?.length) return;
+    updateReceiptUrl();
     for (const transaction of transactions.values()) transaction.attachmentsEdited = true;
     const editor = composerEditor();
     // Tiles render after this event, so an empty composer means earlier files were sent or removed.
     if (!editor || !attachmentCount(editor)) tray.length = 0;
     for (const file of files) if (file instanceof File && !tray.includes(file)) tray.push(file);
+    if (editor && target instanceof Element && !target.closest('aside, nav, [role="dialog"]')
+      && (composerRoot(editor).contains(target) || target.matches('input[type="file"]:is(#upload-files, #upload-photos, [data-testid="file-upload"])'))) {
+      watchUploadedCards(editor, [...files]);
+    }
   }
   document.addEventListener("change", (event) => {
-    if (event.target instanceof HTMLInputElement && event.target.type === "file") remember(event.target.files);
+    if (event.target instanceof HTMLInputElement && event.target.type === "file") remember(event.target.files, event.target);
   }, true);
-  document.addEventListener("paste", (event) => remember(event.clipboardData?.files), true);
-  document.addEventListener("drop", (event) => remember(event.dataTransfer?.files), true);
+  document.addEventListener("paste", (event) => remember(event.clipboardData?.files, event.target), true);
+  document.addEventListener("drop", (event) => remember(event.dataTransfer?.files, event.target), true);
   // Tiles list files in the order they were added, so a removed tile tells which file left.
   document.addEventListener("click", (event) => {
     const editor = composerEditor();
@@ -348,9 +353,203 @@
     if (!button || injecting || !isRemover(button, editor)) return;
     const list = removers(editor);
     const index = list.indexOf(button);
+    for (const card of draftCards(editor)) if (card === button || card.contains(button)) draftFiles.delete(card);
+    stopWatchingUpload();
+    stopWatchingSend();
     if (index >= 0) for (const transaction of transactions.values()) transaction.attachmentsEdited = true;
     if (index >= 0 && list.length === tray.length) tray.splice(index, 1);
   }, true);
+
+  // A historical preview may expose only a filename. Bind local File objects to
+  // newly arrived composer cards, then to the new user turn after a real send.
+  // Existing chips with the same label, including cloud files, are never a source.
+  let draftFiles = new WeakMap();
+  let sentFiles = new WeakMap();
+  let watchingUpload = null, watchingSend = null;
+  let receiptUrl = location.href;
+
+  function draftCards(editor) {
+    const cards = attachmentTiles(editor);
+    for (const button of removers(editor)) {
+      if (!cards.some(card => card.contains(button))) cards.push(button);
+    }
+    const excluded = [...config.prompts, ...config.responses, "aside", "nav", "[role='dialog']"].join(", ");
+    const form = editor.closest("form");
+    return cards.filter(card => !card.closest(excluded) && (!card.closest("form") || card.closest("form") === form));
+  }
+
+  function namesFile(card, name, editor) {
+    const scope = card.matches("button, [role='button']") && !card.parentElement.contains(editor)
+      ? card.parentElement : card;
+    for (const node of [scope, ...scope.querySelectorAll("*")]) {
+      const label = normalize(node.getAttribute("aria-label"));
+      if (node.title === name || node.getAttribute("alt") === name || node.getAttribute("data-filename") === name
+        || label === name || label.replace(/^(?:close|remove file|preview file)\s+/i, "") === name
+        || geminiRemoveName(node) === name || normalize(node.textContent) === name) return true;
+    }
+    return false;
+  }
+
+  function stopWatchingUpload() {
+    if (!watchingUpload) return;
+    watchingUpload.observer.disconnect();
+    clearTimeout(watchingUpload.timer);
+    watchingUpload = null;
+  }
+
+  function matchUploadedCards() {
+    if (!watchingUpload) return;
+    const { editor, before, files, url } = watchingUpload;
+    if (!editor.isConnected || location.href !== url) return stopWatchingUpload();
+    const newCards = draftCards(editor).filter(card => !before.has(card));
+    for (const file of [...files]) {
+      const matches = newCards.filter(card => namesFile(card, file.name, editor));
+      if (matches.length !== 1 || files.some(other => other !== file && namesFile(matches[0], other.name, editor))) continue;
+      draftFiles.set(matches[0], { file, url });
+      files.splice(files.indexOf(file), 1);
+    }
+    if (!files.length) stopWatchingUpload();
+  }
+
+  function watchUploadedCards(editor, files) {
+    updateReceiptUrl();
+    matchUploadedCards();
+    const overlap = watchingUpload?.files.some(earlier => files.some(file => file.name === earlier.name));
+    stopWatchingUpload();
+    stopWatchingSend();
+    const before = new Set(draftCards(editor));
+    // Some applications reuse a card while replacing a file with the same name.
+    for (const card of before) if (files.some(file => draftFiles.get(card)?.file.name === file.name)) draftFiles.delete(card);
+    if (overlap || !files.length || files.length > MAX_FILES || new Set(files.map(file => file.name)).size !== files.length) return;
+    const observer = new MutationObserver(matchUploadedCards);
+    observer.observe(attachmentScope(editor), { subtree: true, childList: true, attributes: true, characterData: true });
+    watchingUpload = { editor, files: files.slice(), before, url: location.href, observer, timer: setTimeout(stopWatchingUpload, 30000) };
+  }
+
+  function firstConversation(from, to) {
+    const start = new URL(from), end = new URL(to);
+    if (start.origin !== end.origin || start.search || end.search) return false;
+    const base = start.pathname.replace(/\/$/, ""), next = end.pathname;
+    if (provider === "claude") return (base === "/new" || !base) && /^\/chat\/[^/]+\/?$/.test(next);
+    if (provider === "gemini") return /^(?:\/u\/\d+)?\/(?:app|gem\/[^/]+)$/.test(base)
+      && next.startsWith(base + "/") && /^\/[^/]+\/?$/.test(next.slice(base.length));
+    const prefix = provider === "chatgpt" ? base.replace(/\/project$/, "") : base;
+    return (!prefix || (provider === "chatgpt" && /^\/g\/[^/]+$/.test(prefix)))
+      && next.startsWith(prefix + "/c/") && /^\/c\/[^/]+\/?$/.test(next.slice(prefix.length));
+  }
+
+  function stopWatchingSend() {
+    if (!watchingSend) return;
+    watchingSend.observer.disconnect();
+    clearTimeout(watchingSend.timer);
+    watchingSend = null;
+  }
+
+  function updateReceiptUrl() {
+    if (receiptUrl === location.href) return;
+    if (!firstConversation(receiptUrl, location.href)) {
+      sentFiles = new WeakMap();
+      stopWatchingSend();
+      tray.length = 0;
+    }
+    draftFiles = new WeakMap();
+    stopWatchingUpload();
+    receiptUrl = location.href;
+  }
+
+  function confirmSentTurn() {
+    if (!globalThis.document?.body) return stopWatchingSend();
+    updateReceiptUrl();
+    if (!watchingSend) return;
+    const { before, text, files, cards, url } = watchingSend;
+    if (url !== location.href && (before.length || !firstConversation(url, location.href))) return stopWatchingSend();
+    const current = composerEditor();
+    if (!current || !blankEditor(current) || attachmentCount(current)) return;
+    const turns = promptElements();
+    if (turns.length !== before.length + 1 || before.some((old, i) => turns[i] !== old)) return;
+    const element = turns.at(-1);
+    if (oneLine(promptText(element)) !== text) return;
+    const chips = globalThis.AISplitReplyFiles?.listPrompt?.(promptAttachmentScope(element)) || [];
+    if (chips.length > files.length || chips.some(chip => chip.nameKnown && !files.some(file => file.name === chip.name))) return;
+    if (!text && (chips.length !== files.length || !files.every(file => chips.some(chip => chip.nameKnown && chip.name === file.name)))) return;
+    sentFiles.set(element, { files, text, parent: element.parentElement, chips: chips.map(chip => chip.card),
+      key: reviewTurnKey(element), url: location.href, first: !before.length });
+    cards.forEach(card => draftFiles.delete(card));
+    for (const file of files) {
+      const index = tray.indexOf(file);
+      if (index !== -1) tray.splice(index, 1);
+    }
+    stopWatchingSend();
+  }
+
+  function watchSentTurn(editor) {
+    confirmSentTurn();
+    stopWatchingSend();
+    matchUploadedCards();
+    const cards = draftCards(editor);
+    if (!cards.length || cards.length > MAX_FILES || cards.length !== attachmentCount(editor) || uploadsPending(editor)) return;
+    const files = [];
+    for (const card of cards) {
+      const receipt = draftFiles.get(card);
+      if (!receipt || receipt.url !== location.href || !namesFile(card, receipt.file.name, editor)
+        || files.some(file => file.name === receipt.file.name)) return;
+      files.push(receipt.file);
+    }
+    const observer = new MutationObserver(confirmSentTurn);
+    watchingSend = { before: promptElements(), editor, text: oneLine(readEditor(editor)), files, cards, url: location.href,
+      observer, timer: setTimeout(stopWatchingSend, 20000) };
+    observer.observe(document.body, { subtree: true, childList: true, characterData: true, attributes: true });
+  }
+
+  function sentPromptFiles(element) {
+    confirmSentTurn();
+    const receipt = sentFiles.get(element);
+    if (!receipt || !element.isConnected || element.parentElement !== receipt.parent
+      || (receipt.key && receipt.key !== reviewTurnKey(element))
+      || oneLine(promptText(element)) !== receipt.text) return [];
+    const scope = promptAttachmentScope(element);
+    if (receipt.chips.some(card => !scope.contains(card))) return [];
+    if (receipt.url !== location.href) {
+      if (!receipt.first || !firstConversation(receipt.url, location.href)) return [];
+      receipt.url = location.href;
+    }
+    return receipt.files.slice();
+  }
+
+  function captureSend(event) {
+    // Ordinary typing and button clicks do not require reading the conversation.
+    if (!tray.length && !watchingUpload && !watchingSend) return;
+    if (event.type === "keydown" && (event.key !== "Enter" || event.shiftKey || event.altKey
+      || event.ctrlKey || event.metaKey || event.isComposing)) return;
+    const target = event.target;
+    if (!(target instanceof Element)) return;
+    if (target.closest("a[href]")) { stopWatchingSend(); return; }
+    const editor = composerEditor();
+    if (!editor) return;
+    if (event.type === "click") {
+      const button = target.closest("button, [role='button']");
+      if (!button || target.closest("[data-ai-split-bridge]")) return;
+      try { if (sendButton(editor) !== button) return; } catch { return; }
+    } else if (event.type === "keydown") {
+      if (!editor.contains(target)) return;
+      try { sendButton(editor); } catch { return; }
+    } else if (event.target !== editor.closest("form")) return;
+    watchSentTurn(editor);
+  }
+  for (const type of ["click", "keydown", "submit"]) document.addEventListener(type, captureSend, true);
+  document.addEventListener("pointerdown", () => {
+    if (watchingSend) { confirmSentTurn(); stopWatchingSend(); }
+  }, true);
+  document.addEventListener("input", event => {
+    if (watchingSend && watchingSend.editor.contains(event.target)
+      && (event.isTrusted || !blankEditor(watchingSend.editor))) stopWatchingSend();
+  }, true);
+  globalThis.navigation?.addEventListener("currententrychange", updateReceiptUrl);
+  addEventListener("popstate", () => { stopWatchingSend(); updateReceiptUrl(); });
+  addEventListener("pagehide", () => {
+    stopWatchingSend(); stopWatchingUpload();
+    draftFiles = new WeakMap(); sentFiles = new WeakMap(); tray.length = 0;
+  });
 
   function attachedFiles(editor) {
     const count = attachmentCount(editor);
@@ -495,6 +694,7 @@
       return data;
     };
     const input = fileInput(editor, files);
+    watchUploadedCards(editor, files);
     injecting = true;
     try {
       if (input) {
@@ -515,7 +715,7 @@
     if (transaction.input) transaction.input.value = "";
     if (!arrived) throw new Error(t("{name} did not show the copied attachments. It may not accept these files.", { name: config.name }));
     // A kept draft can subsequently be the source of Send both.
-    if (provider === "gemini") tray.splice(0, tray.length, ...files);
+    if (!transaction.attachmentsEdited) tray.splice(0, tray.length, ...files);
   }
 
   // Removes only the tiles this request added; returns how many could not be removed.
@@ -529,7 +729,12 @@
       await wait(150);
     }
     if (transaction.input) transaction.input.value = "";
-    return Math.max(added().length, attachmentCount(transaction.editor) - transaction.attachmentsBefore);
+    const remaining = Math.max(added().length, attachmentCount(transaction.editor) - transaction.attachmentsBefore);
+    if (!remaining) for (const file of transaction.files) {
+      const index = tray.indexOf(file);
+      if (index !== -1) tray.splice(index, 1);
+    }
+    return remaining;
   }
 
   // Gemini can put the action row outside the text field and switch the trailing
@@ -672,7 +877,10 @@
   }
 
   // After a pane navigates, the outgoing page can still answer briefly; it must not take the message.
-  function assertExpectedPage(expected, notPage) {
+  function assertExpectedPage(expected, notPage, expectedUrl) {
+    if (expectedUrl !== undefined && location.href !== expectedUrl) {
+      throw new Error(t("The chat changed. Refresh and try again."));
+    }
     if ((expected && expected !== provider) || (notPage !== undefined && notPage === performance.timeOrigin)) {
       throw retryable(t("{name} is still opening.", { name: config.name }));
     }
@@ -681,7 +889,7 @@
   // A Gemini tab can load the transcript before it mounts its editor. A pane
   // being switched already has its own retry loop in the background worker.
   function withMountedComposer(request, action) {
-    assertExpectedPage(request.provider, request.notPage);
+    assertExpectedPage(request.provider, request.notPage, request.expectedUrl);
     if (provider !== "gemini" || request.provider || firstMatch(config.editors)) return action(request);
     const page = location.href;
     return until(() => location.href !== page || firstMatch(config.editors), 4000).then(() => {
@@ -835,8 +1043,9 @@
     return { ok: true };
   }
 
-  function responseText(element) {
+  function responseText(element, stripUploads = false) {
     const clone = element.cloneNode(true);
+    if (stripUploads) globalThis.AISplitReplyFiles?.stripPromptFiles?.(clone);
     const hidden = ["button", "input", "textarea", "nav", "time", "style", "script", "template", "[hidden]",
       "[role='button']", "[role='toolbar']", "[aria-hidden='true']", ".sr-only", ".visually-hidden", ".cdk-visually-hidden", ...(config.ignore || [])];
     clone.querySelectorAll(hidden.join(", ")).forEach((node) => node.remove());
@@ -870,6 +1079,11 @@
 
   function promptElements() {
     const found = [...document.querySelectorAll(config.prompts.join(", "))].filter(provider === "gemini" ? messageVisible : visible);
+    // A file-only turn can have a visible upload row and no text bubble at all.
+    for (const turn of document.querySelectorAll("[data-turn='user'], [data-testid='user-turn'], [data-testid='user-message-container'], [data-turn-key^='user-']")) {
+      if (!found.some(node => turn.contains(node)) && messageVisible(turn)
+        && !turn.querySelector(config.responses.join(", ")) && globalThis.AISplitReplyFiles?.listPrompt?.(turn).length) found.push(turn);
+    }
     // Grok also renders user bubbles without a role attribute. An Edit action identifies
     // those bubbles, while an assistant markdown block or another turn stops the search.
     if (provider === "grok") {
@@ -918,11 +1132,11 @@
       // The content wrapper is optional. Both layouts keep the answer in its own host.
       const parts = [...element.querySelectorAll("[data-model-response-turn-id], [data-testid='collapsible-response-content']")].filter(messageVisible);
       return parts.filter(node => !parts.some(other => other !== node && node.contains(other)))
-        .map(responseText).filter(Boolean).join("\n\n");
+        .map(node => responseText(node)).filter(Boolean).join("\n\n");
     }
     if (provider !== "claude" && provider !== "gemini") return responseText(element);
     const blocks = raw.filter(node => node === element || element.contains(node));
-    return blocks.length ? blocks.map(responseText).filter(Boolean).join("\n\n") : responseText(element);
+    return blocks.length ? blocks.map(node => responseText(node)).filter(Boolean).join("\n\n") : responseText(element);
   }
 
   function promptText(element) {
@@ -930,10 +1144,45 @@
       const body = element.querySelector("[data-testid='user-prompt-content'], .query-content");
       if (body) {
         const quotes = [...element.querySelectorAll("[data-testid='user-submitted-quote']")].filter(messageVisible);
-        return [...quotes, body].map(responseText).filter(Boolean).join("\n\n");
+        return [...quotes, body].map(node => responseText(node, true)).filter(Boolean).join("\n\n");
       }
     }
-    return responseText(element);
+    return responseText(element, true);
+  }
+
+  // Some sites put the upload row beside the text bubble inside the user's turn.
+  function promptAttachmentScope(element) {
+    const turn = element.closest("article, [data-turn-key], [data-turn-id], [data-turn='user'], [data-testid^='conversation-turn-'], [data-testid='user-message-container'], [data-testid='user-turn'], user-query, [data-test-id='user-query']");
+    if (!turn || turn === element || turn.querySelector(config.responses.join(", ")) ||
+      turn.querySelector("form, textarea, [contenteditable='true']")) return element;
+    const samePrompt = [...turn.querySelectorAll(config.prompts.join(", "))].every(node => node.contains(element) || element.contains(node));
+    return samePrompt ? turn : element;
+  }
+
+  function promptFiles(element) {
+    const cards = globalThis.AISplitReplyFiles?.listPrompt?.(promptAttachmentScope(element)) || [];
+    const originals = sentPromptFiles(element);
+    if (!originals.length || originals.length < cards.length) return cards;
+    const names = originals.map(file => file.name);
+    for (const card of cards.filter(card => card.nameKnown)) {
+      const index = names.indexOf(card.name);
+      if (index < 0) return cards;
+      names.splice(index, 1);
+    }
+    return originals.map(file => ({ kind: "local-prompt", name: file.name, promptAttachment: true, localFile: file, promptElement: element }));
+  }
+
+  async function readLocalPromptFile(descriptor) {
+    const file = descriptor.pickedFile || descriptor.localFile;
+    const stillCurrent = () => {
+      if (!descriptor.pickedFile) return sentPromptFiles(descriptor.promptElement).includes(file);
+      return (!descriptor.nameKnown || descriptor.name === file.name) && globalThis.AISplitReplyFiles.isCurrentPromptFile(descriptor);
+    };
+    if (!file || !stillCurrent()) throw new Error(t("The prompt attachment changed. Open Share again."));
+    if (file.size > MAX_FILE_BYTES) throw new Error(t("The file exceeds 20 MB."));
+    const data = encode(new Uint8Array(await file.arrayBuffer()));
+    if (!stillCurrent()) throw new Error(t("The prompt attachment changed. Open Share again."));
+    return { name: file.name, type: file.type, lastModified: file.lastModified, data };
   }
 
   function assertGeminiReplyFinished(element) {
@@ -1301,6 +1550,10 @@
         anchors.push({ ...placeInBar(slot.parentElement), response });
         break;
       }
+      if (anchors.at(-1)?.response !== response) {
+        const turn = promptAttachmentScope(response);
+        if (globalThis.AISplitReplyFiles?.listPrompt?.(turn).length) anchors.push({ parent: turn, before: null, response });
+      }
     }
     return anchors;
   }
@@ -1327,36 +1580,55 @@
   function messages() {
     const raw = rawResponses();
     return messageElements({ raw }).map(({element, role}) => role === "user"
-      ? { element, role, text: promptText(element) }
+      ? { element, role, text: promptText(element), files: promptFiles(element) }
       : { element, role, text: replyBody(element, raw), files: globalThis.AISplitReplyFiles?.list(element) || [] }
     ).filter(entry => entry.text || entry.files?.length);
   }
 
+  async function readWholePrompt(element) {
+    const scope = promptAttachmentScope(element);
+    if (scope.querySelector('button[aria-controls][aria-expanded="false"]')) {
+      const page = location.href;
+      await globalThis.AISplitReplyFiles?.expand?.(scope);
+      if (!element.isConnected || location.href !== page || promptAttachmentScope(element) !== scope) {
+        throw new Error(t("The prompt attachment changed. Open Share again."));
+      }
+    }
+    const files = promptFiles(element);
+    return { ok: true, text: checkedText(promptText(element), files.length > 0), partial: false, prompt: true, ...(files.length ? { files } : {}) };
+  }
+
   async function readMessage(element) {
-    const entry = messages().find(message => message.element === element);
+    const entry = messageElements().find(message => message.element === element);
     if (!entry) throw new Error(t("This message is no longer on the page. Select it again."));
     if (entry.role === "assistant") return readReply(element);
     const selected = selectedWithin(element);
-    return { ok: true, text: checkedText(selected || entry.text), partial: !!selected, prompt: true };
+    if (selected) return { ok: true, text: checkedText(selected), partial: true, prompt: true };
+    return readWholePrompt(element);
   }
 
   async function readMessages(elements) {
     if (!Array.isArray(elements) || !elements.length) throw new Error(t("Select at least one message to share."));
-    const wanted = new Set(elements), available = messages();
+    const wanted = new Set(elements), available = messageElements();
     const selected = available.filter(entry => wanted.has(entry.element));
     if (selected.length !== wanted.size) throw new Error(t("Some selected messages are no longer on the page. Select them again."));
-    const url = location.href, parts = [], files = [];
+    const url = location.href, parts = [], textParts = [], files = [];
     for (const entry of selected) {
       // Checkbox selection always means the whole message, regardless of highlighted text.
       const result = entry.role === "assistant" ? await readReply(entry.element, { whole: true })
-        : { text: promptText(entry.element) };
+        : await readWholePrompt(entry.element);
       if (location.href !== url || !selected.every(item => item.element.isConnected)) {
         throw new Error(t("The conversation changed while reading it. Select the messages again."));
       }
-      parts.push(`${t("{speaker}:", { speaker: entry.role === "user" ? t("You") : config.name })}\n${result.text || t("[Generated files attached]")}`);
+      const text = result.text || (entry.role === "user" ? t("[Files attached]") : t("[Generated files attached]"));
+      const part = `${t("{speaker}:", { speaker: entry.role === "user" ? t("You") : config.name })}\n${text}`;
+      parts.push(part);
+      if (result.text) textParts.push(part);
       files.push(...(result.files || []));
     }
-    return { ok: true, text: checkedText(parts.join("\n\n---\n\n")), files, partial: false, conversation: true };
+    const separator = "\n\n---\n\n";
+    return { ok: true, text: checkedText(parts.join(separator)), files, partial: false, conversation: true,
+      ...(textParts.length !== parts.length ? { textWithoutFiles: textParts.join(separator) } : {}) };
   }
 
   // The composer carries the site's real UI font and colors; some sites leave the page body at browser defaults.
@@ -1395,7 +1667,7 @@
     getDraft: () => ({ ok: true, text: readEditor(getEditor()) }),
     readPrompt, canLeave, preflight: request => withMountedComposer(request, preflight), stage, validate, commit, keep, cancel,
     insert: async request => withMountedComposer(request, insert), getResponse, replyText,
-    readReplyFiles: files => globalThis.AISplitReplyFiles.read(files),
+    readReplyFiles: files => globalThis.AISplitReplyFiles.read(files, readLocalPromptFile),
     readReply, messageElements, messages, readMessage, readMessages, promptAnchors,
     compareStatus, readCompareAnswer: compareAnswer, checkCompareAnswer, reviewResult,
     readResponse: async () => { getResponse(); return readReply(latestReply()); },

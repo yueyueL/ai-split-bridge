@@ -21,13 +21,24 @@ Say you ask both assistants, “How would you teach spreadsheets to beginners in
 - Click **Compare** and choose one assistant to read both plans. It looks for disagreements, gaps, and claims worth checking, including claims both assistants make.
 - Click **Cross-review** to have each assistant critique the other’s plan. Read the critiques side by side, then choose which assistant should revise its answer. The arrow beside **Cross-review** also offers **Find errors** and **Suggest improvements**.
 
-You can edit the sharing, comparison, and review instructions in the extension settings. Turn off **Send right away** to edit the draft before sending.
+## Create your own actions
+
+Open the arrow beside **Cross-review** and choose **Add action…**. For example, name it **Check citations** and enter “List the claims that need a source and suggest how to verify each one.” After you save, **Check citations** appears alongside **Critique** and **Find errors**. Selecting it gives each assistant that prompt with the other assistant’s answer.
+
+The share arrow works the same way. Actions for **your prompts**, **assistant replies**, and **cross-reviews** each have their own list. In **Sharing → Actions**, you can edit the prompt for a built-in action or choose which action the main button runs in one click. **Additional instructions** can still add a shared rule to multiple actions.
 
 ## Share a message or switch chats
 
-- **Share with…** sends your prompt, an assistant’s reply, or a highlighted passage to another chat. You can include supported files generated in a reply.
+- Click the other assistant’s name beside a message to share it. A whole prompt includes its supported attachments. A whole reply includes its supported generated files. Highlight a passage to share just that text.
+- Use the arrow to change the destination or leave files out. If an older prompt only shows a file preview, you can choose the original file there. Turn off **Send right away** in the popup to leave a draft.
 - Open the arrow beside **Send both** to share several messages in order, send a prompt to more tabs, or bring another conversation into the opposite pane.
 - For long chats, turn on **Wider messages** or **Message tools** in settings. You can collapse a reply or bookmark one you want to find again.
+
+## Hand a conversation to another assistant
+
+Open the arrow beside **Send both** and choose **Summarize this chat…**. With just one AI chat open, choose **Summarize…** beside the composer. You can generate the summary in that chat or edit the request as a draft first.
+
+When the reply is ready, choose **Share latest reply as context…** to give another assistant the background and next steps. To include an original deliverable, use **Select messages…**, pick both the summary and the original reply, then choose **Share as context…**. Keep the original file selected if the share menu lists it.
 
 ## Privacy and local setup
 

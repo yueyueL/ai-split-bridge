@@ -6,6 +6,7 @@ import { composeShare } from "../extension/settings.js";
 import { translations } from "./translations.js";
 
 const adapterSource = await readFile(new URL("../extension/adapters.js", import.meta.url), "utf8");
+const replyFilesSource = await readFile(new URL("../extension/reply-files.js", import.meta.url), "utf8");
 const contentSource = await readFile(new URL("../extension/content.js", import.meta.url), "utf8");
 const geminiQuillComposer = await readFile(new URL("./fixtures/gemini-quill-composer.html", import.meta.url), "utf8");
 
@@ -70,6 +71,66 @@ for (const provider of Object.keys(fixtures)) {
     assert.equal(fixture.clicks(), 1, "a duplicate commit must not click twice");
   });
 }
+
+test("past prompts include only their own uploads, including a file-only turn without a copy button", async t => {
+  const card = name => `<div data-testid="attachment-preview" data-filename="${name}"><span>${name}</span></div>`;
+  const fixture = setup("claude", { body: `<main>
+    <div data-turn-key="user-1">${card("report.pdf")}<div data-testid="user-message">Review our plan.</div></div>
+    <section data-testid="assistant-message">One answer.</section>
+    <div data-turn-key="user-2">${card("notes.pdf")}</div></main>` });
+  t.after(fixture.close);
+  fixture.window.eval(replyFilesSource);
+  const { adapter, window } = fixture;
+  const prompts = adapter.messages().filter(entry => entry.role === "user");
+  assert.equal(prompts.length, 2);
+  const [first, second] = prompts;
+  const whole = await adapter.readMessage(first.element);
+  assert.deepEqual(Array.from(whole.files, file => file.name), ["report.pdf"]);
+  assert.equal(whole.text, "Review our plan.");
+  assert.equal((await adapter.readMessage(second.element)).text, "");
+  assert.ok(adapter.promptAnchors().some(anchor => anchor.response === second.element));
+  const range = window.document.createRange();
+  range.setStart(first.element.firstChild, 0);
+  range.setEnd(first.element.firstChild, 6);
+  window.getSelection().addRange(range);
+  const excerpt = await adapter.readMessage(first.element);
+  assert.equal(excerpt.text, "Review");
+  assert.equal(excerpt.files, undefined);
+  const transcript = await adapter.readMessages([second.element, first.element]);
+  assert.deepEqual(Array.from(transcript.files, file => file.name), ["report.pdf", "notes.pdf"]);
+  assert.match(transcript.text, /Review our plan\.[\s\S]*\[Files attached\]/);
+  assert.equal(transcript.textWithoutFiles, "You:\nReview our plan.");
+});
+
+test("sharing a whole prompt discovers files behind its native more-files control", async t => {
+  const fixture = setup("chatgpt", { body: `<article><div data-message-author-role="user">Review the PDFs.</div>
+    <div class="uploads"><button aria-label="Open preview of one.pdf"></button>
+    <button aria-expanded="false" aria-controls="more">1 more</button></div></article>` });
+  t.after(fixture.close);
+  fixture.window.eval(replyFilesSource);
+  const button = fixture.window.document.querySelector("[aria-controls]");
+  button.onclick = () => {
+    button.setAttribute("aria-expanded", "true");
+    button.insertAdjacentHTML("beforebegin", '<button aria-label="Open preview of two.pdf"></button>');
+  };
+  const [prompt] = fixture.adapter.messages();
+  assert.equal(button.getAttribute("aria-expanded"), "false");
+  const result = await fixture.adapter.readMessages([prompt.element]);
+  assert.deepEqual(Array.from(result.files, file => file.name), ["one.pdf", "two.pdf"]);
+});
+
+test("an attachment beside a different prompt in a shared container is never borrowed", async t => {
+  const fixture = setup("chatgpt", { body: `<article>
+    <div data-message-author-role="user">First</div>
+    <div data-message-author-role="user"><div data-testid="file-preview" data-filename="second.pdf">second.pdf</div>Second</div>
+  </article>` });
+  t.after(fixture.close);
+  fixture.window.eval(replyFilesSource);
+  const [first, second] = fixture.adapter.messages();
+  assert.equal((await fixture.adapter.readMessage(first.element)).files, undefined);
+  assert.equal((await fixture.adapter.readMessage(second.element)).text, "Second");
+  assert.equal((await fixture.adapter.readMessage(second.element)).files[0].name, "second.pdf");
+});
 
 test("a past ChatGPT prompt reaches Gemini when its native Send appears after staging", async t => {
   const source = setup("chatgpt", { body: "<main><div data-message-author-role='user'>Compare the two outlines.</div></main>" });
@@ -364,6 +425,143 @@ function acceptFiles(fixture, { on = ["paste", "drop"] } = {}) {
   const text = async (file) => Buffer.from(await read(file)).toString();
   return { tray, received, paste, text };
 }
+
+// Model the native site consuming the draft and appending a user turn with
+// preview-only cards. Exercise sharing through the same public API as the UI.
+function appendSentTurn(f, site, selector, names) {
+  const element = f.window.document.createElement("div");
+  element.setAttribute(...selector);
+  element.dataset.messageId = f.window.crypto.randomUUID();
+  element.textContent = f.editor.textContent;
+  for (const name of names) {
+    const preview = f.window.document.createElement("div");
+    preview.dataset.testid = "attachment-preview";
+    preview.dataset.filename = name;
+    preview.textContent = name;
+    element.append(preview);
+  }
+  f.editor.closest("form").before(element);
+  site.tray.replaceChildren();
+  f.setDraft("");
+  return element;
+}
+
+for (const [provider, landing, saved, selector] of [
+  ["chatgpt", "/g/example/project", "/g/example/c/new", ["data-message-author-role", "user"]],
+  ["claude", "/new", "/chat/new", ["data-testid", "user-message"]],
+  ["gemini", "/u/0/app", "/u/0/app/new", ["data-test-id", "user-query"]],
+  ["grok", "/", "/c/new", ["data-testid", "user-message"]],
+]) {
+  test(provider + " shares the actual uploaded PDF from a prompt sent before the first chat URL was assigned", async t => {
+    const f = setup(provider, {url: "https://" + fixtures[provider].host + landing});
+    t.after(f.close);
+    f.window.eval(replyFilesSource);
+    const site = acceptFiles(f);
+    const file = new f.window.File(["%PDF-first"], "report.pdf", { type: "application/pdf" });
+    site.paste([file]);
+    f.setDraft("Read the report");
+    // ChatGPT via Enter, the other sites via their native Send control.
+    if (provider === "chatgpt") f.editor.dispatchEvent(new f.window.KeyboardEvent("keydown", { key:"Enter", bubbles:true }));
+    else f.editor.closest("form").querySelector("button[aria-label='" + fixtures[provider].send + "']").click();
+    f.window.history.pushState({}, "", saved);
+    const turn = appendSentTurn(f, site, selector, [file.name]);
+    const shared = await f.adapter.readMessage(turn);
+    assert.equal(shared.text, "Read the report");
+    const [copy] = await f.adapter.readReplyFiles(shared.files);
+    assert.deepEqual([copy.name, copy.type, atob(copy.data)], [file.name, file.type, "%PDF-first"]);
+    turn.dataset.messageId = "a-recycled-turn";
+    await assert.rejects(f.adapter.readReplyFiles(shared.files), /changed/);
+  });
+}
+
+test("two identical prompts with equally named uploads each retain their own bytes; an unobserved upload stays unavailable", async t => {
+  const f = setup();
+  t.after(f.close);
+  f.window.eval(replyFilesSource);
+  const site = acceptFiles(f), selector = ["data-message-author-role", "user"];
+  const turns = [];
+  for (const version of ["old", "new"]) {
+    site.paste([new f.window.File([version], "same.pdf")]);
+    f.setDraft("Same question");
+    f.editor.closest("form").querySelector("button[aria-label='Send']").click();
+    turns.push(appendSentTurn(f, site, selector, ["same.pdf"]));
+    await Promise.resolve();
+  }
+  for (const [index, expected] of ["old", "new"].entries()) {
+    const shared = await f.adapter.readMessage(turns[index]);
+    const [copy] = await f.adapter.readReplyFiles(shared.files);
+    assert.equal(atob(copy.data), expected);
+  }
+  // The third prompt has the same text and card label, but the site restored
+  // the attachment itself. The local originals from the earlier turns are not candidates.
+  f.setDraft("Same question");
+  const third = appendSentTurn(f, site, selector, ["same.pdf"]);
+  assert.equal((await f.adapter.readMessage(third)).files[0].kind, "unavailable");
+  f.window.history.replaceState({}, "", "/c/another");
+  assert.equal((await f.adapter.readMessage(turns[0])).files[0].kind, "unavailable");
+});
+
+test("cancelled Enter, removed cards, and duplicate upload names never populate a different prompt", async t => {
+  const f = setup();
+  t.after(f.close);
+  f.window.eval(replyFilesSource);
+  const site = acceptFiles(f), selector = ["data-message-author-role", "user"];
+  const attach = bytes => new f.window.File([bytes], "same.pdf");
+  site.paste([attach("removed")]);
+  f.setDraft("Original");
+  f.editor.dispatchEvent(new f.window.KeyboardEvent("keydown", { key:"Enter", bubbles:true }));
+  f.window.document.querySelector("[aria-label='Remove file']").click();
+  const removed = appendSentTurn(f, site, selector, ["same.pdf"]);
+  assert.equal((await f.adapter.readMessage(removed)).files[0].kind, "unavailable");
+  site.paste([attach("first"), attach("second")]);
+  f.setDraft("Original");
+  f.editor.closest("form").querySelector("button[aria-label='Send']").click();
+  const duplicate = appendSentTurn(f, site, selector, ["same.pdf", "same.pdf"]);
+  assert.deepEqual(Array.from((await f.adapter.readMessage(duplicate)).files, file => file.kind), ["unavailable", "unavailable"]);
+});
+
+test("a file-only turn retains its original after a staged bridge commit", async t => {
+  const f = setup("claude");
+  t.after(f.close);
+  f.window.eval(replyFilesSource);
+  const site = acceptFiles(f);
+  const request = { requestId:"file-only-turn", text:"", attachments:1 };
+  const copy = { name:"first.pdf", type:"application/pdf", lastModified:10, data:btoa("%PDF-fixture") };
+  f.adapter.preflight(request);
+  await f.adapter.stage({ ...request, files:[copy] });
+  await f.adapter.validate(request);
+  f.adapter.commit(request);
+  const turn = appendSentTurn(f, site, ["data-testid", "user-message"], ["first.pdf"]);
+  const shared = await f.adapter.readMessage(turn);
+  assert.equal(shared.text, "");
+  const files = await f.adapter.readReplyFiles(shared.files);
+  assert.equal(atob(files[0].data), "%PDF-fixture");
+});
+
+test("only a file picker belonging to the composer can supply the bytes for its sent card", async t => {
+  const f = setup();
+  t.after(f.close);
+  f.window.eval(replyFilesSource);
+  const site = acceptFiles(f);
+  const form = f.editor.closest("form"), selector = ["data-message-author-role", "user"];
+  const dialog = f.window.document.createElement("aside");
+  form.after(dialog);
+  for (const [owner, verified] of [[form, true], [dialog, false]]) {
+    const picker = f.window.document.createElement("input");
+    picker.type = "file";
+    owner.append(picker);
+    const file = new f.window.File([verified ? "composer original" : "other picker"], "notes.pdf");
+    Object.defineProperty(picker, "files", {value: [file]});
+    picker.dispatchEvent(new f.window.Event("change", {bubbles:true}));
+    site.tray.innerHTML = '<div data-testid="file-preview"><span>notes.pdf</span><button aria-label="Remove file"></button></div>';
+    f.setDraft("Check these notes");
+    form.querySelector("button[aria-label='Send']").click();
+    const turn = appendSentTurn(f, site, selector, [file.name]);
+    const { files } = await f.adapter.readMessage(turn);
+    if (verified) assert.equal(atob((await f.adapter.readReplyFiles(files))[0].data), "composer original");
+    else assert.equal(files[0].kind, "unavailable");
+  }
+});
 
 test("files attached in the chat you send from are read for copying, minus the ones you removed", async (t) => {
   const fixture = setup();
@@ -979,7 +1177,8 @@ test("runtime interface returns errors and only accepts this extension's message
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.equal(fixture.window.document.querySelectorAll("ai-split-bridge[data-ai-split-bridge='layer']").length, 1);
   const composer = fixture.window.document.querySelector("ai-split-bridge[data-ai-split-bridge='composer']");
-  assert.equal(composer?.style.display ?? "none", "none", "no other chats means no extra button");
+  assert.equal(composer.shadowRoot.querySelector(".send").textContent, "Summarize…");
+  assert.equal(composer.shadowRoot.querySelector(".more").hidden, true);
   assert.equal(fixture.clicks(), 0);
 });
 

@@ -7,9 +7,9 @@ import { translations } from './translations.js';
 const replySource = await readFile(new URL('../extension/reply-files.js', import.meta.url), 'utf8');
 const captureSource = await readFile(new URL('../extension/download-capture.js', import.meta.url), 'utf8');
 
-function setup(body, { capture = false } = {}) {
+function setup(body, { capture = false, host = 'claude.ai' } = {}) {
   const dom = new JSDOM(`<!doctype html><main data-message-id="reply-1">${body}</main>`, {
-    url: 'https://claude.ai/chat/test', runScripts: 'outside-only', pretendToBeVisual: true,
+    url: `https://${host}/chat/test`, runScripts: 'outside-only', pretendToBeVisual: true,
   });
   const { window } = dom;
   const document = window.document;
@@ -146,4 +146,141 @@ test('a download failure reported by the page is translated before it is shown',
     f.document.dispatchEvent(new f.window.CustomEvent('asb-file-result', { detail: JSON.stringify({ id, error: 'The file exceeds 20 MB.' }) }));
   });
   await assert.rejects(f.api.read(f.api.list(f.scope)), { message: '没有发送任何内容。notes.md：文件超过 20 MB。请手动下载并附加这个文件，或取消勾选生成的文件，只分享文字。' });
+});
+
+const promptShapes = {
+  'chatgpt.com': ['<div data-testid="attachment-preview"><button aria-label="Open preview of project.pdf"></button>', '</div>'],
+  'claude.ai': ['<div data-testid="file-thumbnail"><span data-testid="file-name">project.pdf</span>', '</div>'],
+  'gemini.google.com': ['<user-query-file-preview><gem-attachment><span>project.pdf</span></gem-attachment>', '</user-query-file-preview>'],
+  'grok.com': ['<div data-testid="file-pill" data-filename="project.pdf">', '</div>'],
+};
+
+for (const [host, [startCard, endCard]] of Object.entries(promptShapes)) {
+  test(host + ' shares the selected historical upload bytes, leaves links as text, and strips file cards from the quote', async t => {
+    const download = '<a href="/native-download" download="project.pdf">Download</a>';
+    const f = setup(`<article id="other">${startCard}${download}${endCard}</article>
+      <article id="selected">${startCard}${download}${endCard}<p>Summarize this. <a href="https://example.com/paper.pdf">See paper</a></p></article>`,
+      { capture: true, host });
+    t.after(() => f.dom.window.close());
+    const scope = f.scope.querySelector('#selected');
+    const readURLs = [];
+    f.window.fetch = async url => {
+      readURLs.push(url);
+      return new Response(Uint8Array.of(0, 255, 37), { headers: { 'Content-Type': 'application/pdf' } });
+    };
+    const selected = f.api.listPrompt(scope);
+    assert.equal(selected.length, 1);
+    assert.equal(selected[0].name, 'project.pdf');
+    assert.equal(selected[0].nameKnown, true);
+    assert.equal(selected[0].kind, 'download');
+    assert.ok(scope.contains(selected[0].element));
+    const [file] = await f.api.read(selected);
+    assert.deepEqual([file.name, file.type, file.data], ['project.pdf', 'application/pdf', 'AP8l']);
+    assert.deepEqual(readURLs, [`https://${host}/native-download`]);
+    assert.equal(f.nativeClicks(), 0);
+    const clone = scope.cloneNode(true);
+    f.api.stripPromptFiles(clone);
+    assert.equal(clone.textContent.trim(), 'Summarize this. See paper');
+    assert.equal(clone.querySelector('a').getAttribute('href'), 'https://example.com/paper.pdf');
+    assert.ok(scope.contains(selected[0].element));
+  });
+}
+
+test('opaque cards are listed and fail before capture, including truncated Gemini tiles and preview-only images', async t => {
+  const f = setup(`<div tabindex="0"><span>PDF</span><span>trunca…ed.pdf</span></div>
+    <img src="/thumbnail?size=96" alt="Uploaded image">
+    <div data-cds-attachment data-filename="report.pdf"><a download href="https://example.com/tracking.pdf">Download</a></div>
+    <p><button aria-label="Open preview of citation.pdf">citation.pdf</button></p>
+    <form><div data-testid="attachment-preview">Draft.pdf</div></form>
+    <div data-testid="assistant-message"><div data-testid="file-thumbnail">answer.pdf</div></div>
+    <div hidden data-testid="file-thumbnail">invisible.pdf</div>`, { host: 'gemini.google.com' });
+  t.after(() => f.dom.window.close());
+  let requests = 0;
+  f.document.addEventListener('asb-file-request', () => { requests++; });
+  const selected = f.api.listPrompt(f.scope);
+  assert.equal(selected.length, 3);
+  assert.ok(selected.every(file => file.kind === 'unavailable'));
+  assert.deepEqual(Array.from(selected).map(({ name, nameKnown }) => [name, nameKnown]).sort(),
+    [['trunca…ed.pdf', false], ['Attached file', false], ['report.pdf', true]].sort());
+  await assert.rejects(f.api.read(selected), /does not expose the original attachment/);
+  assert.equal(requests, 0);
+});
+
+test('preview label and download click target can be siblings, duplicate filenames keep distinct bytes', async t => {
+  const card = '<div><button aria-label="Open preview of résumé.md">Open</button><button title="Download file">↓</button></div>';
+  const f = setup(card + card, { capture: true, host: 'chatgpt.com' });
+  t.after(() => f.dom.window.close());
+  const selected = f.api.listPrompt(f.scope);
+  assert.equal(selected.length, 2);
+  assert.notEqual(selected[0].key, selected[1].key);
+  selected.forEach((file, i) => {
+    file.element.onclick = () => {
+      const link = f.document.createElement('a');
+      link.download = 'résumé.md';
+      link.href = f.window.URL.createObjectURL(new f.window.Blob([`file ${i + 1}`]));
+      link.click();
+    };
+  });
+  f.scope.prepend(f.scope.lastElementChild);
+  assert.deepEqual(Array.from(await f.api.read(selected), file => Buffer.from(file.data, 'base64').toString()), ['file 1', 'file 2']);
+  selected[0].card.replaceWith(selected[0].card.cloneNode(true));
+  await assert.rejects(f.api.read([selected[0]]), /prompt attachment changed/);
+});
+
+test('the same card cannot silently switch its download URL or be moved to a different chat', async t => {
+  const f = setup('<div data-testid="file-pill"><a href="/old" download="data.csv">Download</a></div>');
+  t.after(() => f.dom.window.close());
+  let attempts = 0;
+  f.document.addEventListener('asb-file-request', () => { attempts++; });
+  const selected = f.api.listPrompt(f.scope);
+  selected[0].element.href = '/replacement';
+  await assert.rejects(f.api.read(selected), /prompt attachment changed/);
+  selected[0].element.href = '/old';
+  f.window.history.pushState({}, '', '/chat/another');
+  await assert.rejects(f.api.read(selected), /prompt attachment changed/);
+  assert.equal(attempts, 0);
+});
+
+test('local and historical file downloads share the same count and byte limits', async t => {
+  const f = setup('<div data-testid="file-pill"><a href="/download" download="target.pdf">Download</a></div>');
+  t.after(() => f.dom.window.close());
+  const local = { kind: 'local-prompt', promptAttachment: true, name: 'big.md' };
+  const [remote] = f.api.listPrompt(f.scope);
+  const payload = 'A'.repeat(Math.ceil(17 * 1024 * 1024 / 3) * 4);
+  let downloads = 0, reads = 0;
+  f.document.addEventListener('asb-file-request', e => {
+    downloads++;
+    const { id } = JSON.parse(e.detail);
+    f.document.dispatchEvent(new f.window.CustomEvent('asb-file-result', { detail: JSON.stringify({ id, file: { name: 'target.pdf', data: payload } }) }));
+  });
+  const readLocal = async () => { reads++; return { name: local.name, data: payload }; };
+  await assert.rejects(f.api.read(Array(11).fill(local), readLocal), /up to 10 files/);
+  assert.equal(reads, 0);
+  await assert.rejects(f.api.read([local], () => ({ name: local.name, data: 'A'.repeat(28 * 1024 * 1024) })), /exceeds 20 MB/);
+  assert.equal(downloads, 0);
+  await assert.rejects(f.api.read([local, remote], readLocal), /32 MB total limit/);
+  assert.equal(downloads, 1);
+  assert.equal(reads, 1);
+});
+
+test('a recycled turn ID invalidates both native historical downloads and chosen originals', async t => {
+  const f = setup('<article data-turn-key="first"><section><div data-testid="file-pill"><a download="diagram.png" href="/files/original">Download</a></div></section></article>');
+  t.after(() => f.dom.window.close());
+  const scope = f.scope.querySelector('section');
+  const [file] = f.api.listPrompt(scope);
+  const chosen = { ...file, kind: 'local-prompt' };
+  assert.equal(f.api.isCurrentPromptFile(chosen), true);
+  scope.parentElement.dataset.turnKey = 'second';
+  assert.equal(f.api.isCurrentPromptFile(file), false);
+  assert.equal(f.api.isCurrentPromptFile(chosen), false);
+  await assert.rejects(f.api.read([file]), /prompt attachment changed/);
+});
+
+test('standalone original download preserves a provider file while a prose link with the same name stays text', async t => {
+  const f = setup('<a download="original.png" href="/backend-api/files/123/content">original.png</a><p><a download="original.png" href="/backend-api/files/321/content">Other diagram</a></p>', { host: 'chatgpt.com' });
+  t.after(() => f.dom.window.close());
+  assert.equal(f.api.listPrompt(f.scope).length, 1);
+  const clone = f.scope.cloneNode(true);
+  f.api.stripPromptFiles(clone);
+  assert.equal(clone.textContent.trim(), 'Other diagram');
 });

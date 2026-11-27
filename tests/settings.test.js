@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { composeShare, composeComparison, defaultMessages, DEFAULT_SHARE_MESSAGE, DEFAULT_PROMPT_MESSAGE, DEFAULT_CONVERSATION_MESSAGE, DEFAULT_COMPARISON_MESSAGE, REVIEW_TEMPLATES, loadSettings, MAX_SHARE_MESSAGE, readSettings, saveSettings } from '../extension/settings.js';
 
 const defaults = {
-  shareMode: 'send', shareMessage: DEFAULT_SHARE_MESSAGE, promptMessage: DEFAULT_PROMPT_MESSAGE,
+  shareMode: 'send', shareMessage: DEFAULT_SHARE_MESSAGE, handoffMessage: defaultMessages('en').handoffMessage, promptMessage: DEFAULT_PROMPT_MESSAGE,
   conversationMessage: DEFAULT_CONVERSATION_MESSAGE, comparisonMessage: DEFAULT_COMPARISON_MESSAGE,
   reviewGuidance: '', critiqueMessage: REVIEW_TEMPLATES.critique.default, errorsMessage: REVIEW_TEMPLATES.errors.default,
   improvementsMessage: REVIEW_TEMPLATES.improvements.default,
@@ -46,7 +46,7 @@ test('existing profiles can customize and reset Compare independently of Replies
 test('full-length multilingual sharing and cross-review instructions survive sync item limits and later edits', async () => {
   const storage = memory();
   const settings = { ...defaults, shareMode: 'draft' };
-  for (const key of ['shareMessage', 'promptMessage', 'conversationMessage', 'comparisonMessage', 'reviewGuidance', 'critiqueMessage', 'errorsMessage', 'improvementsMessage']) {
+  for (const key of ['shareMessage', 'handoffMessage', 'promptMessage', 'conversationMessage', 'comparisonMessage', 'reviewGuidance', 'critiqueMessage', 'errorsMessage', 'improvementsMessage']) {
     settings[key] = ('答'.repeat(999) + '👋' + key + '\n').repeat(4).slice(0, MAX_SHARE_MESSAGE);
     await saveSettings(storage, { [key]: settings[key], shareMode: 'draft' });
   }

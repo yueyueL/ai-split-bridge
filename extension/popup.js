@@ -1,4 +1,4 @@
-import { REVIEW_TEMPLATES, defaultMessages, loadSettings, readSettings, saveSettings } from './settings.js';
+import { defaultMessages, loadSettings, readSettings, saveSettings } from './settings.js';
 
 // popup.html loads the translations as plain scripts before this module.
 const i18n = globalThis.AISplitI18n;
@@ -110,12 +110,9 @@ const message = $('#share-message');
 const sendNow = $('#send-now');
 const kind = $('#share-kind');
 const templates = {
-  reply: { key: 'shareMessage', label: () => t('Message with the shared reply'), placeholder: '{reply}' },
-  prompt: { key: 'promptMessage', label: () => t('Message with your prompt'), placeholder: '{content}' },
   conversation: { key: 'conversationMessage', label: () => t('Message with selected messages'), placeholder: '{content}' },
   comparison: { key: 'comparisonMessage', label: () => t('Comparison instructions'), placeholder: '{answers}' },
   reviewCommon: { key: 'reviewGuidance', label: () => t('Instructions for all cross-reviews') },
-  ...REVIEW_TEMPLATES,
 };
 const current = () => templates[kind.value];
 // The default for the chosen kind of message, written in the interface language.
@@ -124,23 +121,22 @@ const count = () => { $('#count').textContent = `${message.value.length.toLocale
 const describeMode = () => {
   $('#mode-detail').textContent = sendNow.checked ? t('Send shared messages, comparisons and cross-reviews immediately.') : t('Add shared messages, comparisons and cross-reviews as drafts.');
 };
+const pendingChanges = {};
 let settings, saveTimer = null, revision = 0, saveQueue = Promise.resolve();
 function showMessage() {
   const template = current();
   message.value = settings[template.key]?.trim() ? settings[template.key] : fallback();
-  const reviewing = !template.placeholder;
-  $('#message-label').textContent = template.label ? template.label() : t('Cross-review instructions');
+  $('#message-label').textContent = template.label();
   const common = kind.value === 'reviewCommon';
   message.placeholder = common ? t('For example, cite evidence for each criticism.') : '';
-  $('#template-hint').textContent = common ? t('Included in both chats for all three review modes.')
-    : reviewing ? t('The other assistant’s answer is added below these instructions.') : t('Insert');
-  if (reviewing) message.setAttribute('aria-describedby', 'template-hint');
+  $('#template-hint').textContent = common ? t('Applied to both chats in every cross-review.') : t('Insert');
+  if (common) message.setAttribute('aria-describedby', 'template-hint');
   else message.removeAttribute('aria-describedby');
   const comparing = kind.value === 'comparison';
-  $('#assistant-placeholder').hidden = comparing || reviewing;
+  $('#assistant-placeholder').hidden = comparing || common;
   const insert = $('#content-placeholder');
-  insert.hidden = reviewing;
-  if (!reviewing) {
+  insert.hidden = common;
+  if (!common) {
     insert.textContent = insert.dataset.insert = template.placeholder;
     insert.title = comparing ? t('Insert both labelled answers here. If omitted, they go at the end.') : t('The shared text. Without it, the text goes at the end');
   }
@@ -152,10 +148,13 @@ function save() {
   if (!settings) return;
   // Include every local edit, and finish writes in order. Switching templates or
   // changing Send right away must not cancel a message still waiting to save.
-  const changes = { ...settings }, savedRevision = revision;
+  const changes = { ...pendingChanges }, savedRevision = revision;
   saveQueue = saveQueue.then(async () => {
     try {
       await saveSettings(chrome.storage.sync, changes, i18n.language);
+      for (const [key, value] of Object.entries(changes)) {
+        if (pendingChanges[key] === value) delete pendingChanges[key];
+      }
       if (savedRevision === revision) $('#saved').textContent = t('Saved');
     } catch (error) {
       if (savedRevision === revision) $('#saved').textContent = t('Not saved: {error}', { error: error.message });
@@ -190,18 +189,19 @@ i18n.follow(chrome, showLanguage).then(() => {
 }).then(stored => {
   settings = stored;
   sendNow.checked = settings.shareMode === 'send';
+  sendNow.disabled = false;
   $('#share-settings').querySelectorAll('input, select, textarea, button').forEach(control => { control.disabled = false; });
   describeMode();
   showMessage();
 }, error => { $('#saved').textContent = t('Could not load settings: {error}', { error: error.message }); });
 sendNow.addEventListener('change', () => {
   describeMode();
-  settings.shareMode = sendNow.checked ? 'send' : 'draft';
+  pendingChanges.shareMode = settings.shareMode = sendNow.checked ? 'send' : 'draft';
   revision++;
   save();
 });
 message.addEventListener('input', () => {
-  settings[current().key] = message.value;
+  pendingChanges[current().key] = settings[current().key] = message.value;
   revision++;
   $('#saved').textContent = '';
   count();
@@ -227,7 +227,7 @@ message.addEventListener('blur', () => {
 });
 addEventListener('pagehide', flush);
 $('#reset-message').addEventListener('click', () => {
-  settings[current().key] = message.value = fallback();
+  pendingChanges[current().key] = settings[current().key] = message.value = fallback();
   revision++;
   count();
   save();

@@ -30,6 +30,7 @@ export const MAX_SHARE_MESSAGE = 4000;
 
 const defaults = {
   shareMessage: DEFAULT_SHARE_MESSAGE,
+  handoffMessage: 'Use the context below from my conversation with {assistant} to continue the work. Follow the decisions already made, preserve quoted deliverables and file references as supplied, and start with the next unfinished step. Ask me if anything essential is missing.\n\n{content}',
   promptMessage: DEFAULT_PROMPT_MESSAGE,
   conversationMessage: DEFAULT_CONVERSATION_MESSAGE,
   comparisonMessage: DEFAULT_COMPARISON_MESSAGE,
@@ -43,6 +44,7 @@ const MESSAGES = {
   en: defaults,
   'zh-CN': {
     shareMessage: '下面是 {assistant} 的回复：\n\n{reply}\n\n你怎么看？请批判性地审视它，指出其中错误、薄弱或遗漏的地方。\n\n如果其中有好的想法，请用来改进你之前的回答。不要只是附和，请运用你自己的判断。',
+    handoffMessage: '以下是我和 {assistant} 对话中的交接内容。请按已有约定继续，保留引用的原始产出和文件信息，从下一项未完成的工作开始。如果缺少关键信息，请先问我。\n\n{content}',
     promptMessage: '下面是我在与 {assistant} 的聊天中发送的提问：\n\n{content}\n\n请回应这条提问。',
     conversationMessage: '下面是我与 {assistant} 对话中选出的几条消息：\n\n{content}\n\n请基于这段上下文继续。',
     comparisonMessage: [
@@ -100,6 +102,12 @@ export async function loadSettings(storage, language = 'en') {
 }
 
 export async function saveSettings(storage, changes, language = 'en') {
+  const write = () => writeSettings(storage, changes, language);
+  // The popup's action editor and general preferences can save different fields concurrently.
+  return globalThis.navigator?.locks ? navigator.locks.request('shareSettings', write) : write();
+}
+
+async function writeSettings(storage, changes, language) {
   const previous = await storedSettings(storage);
   const settings = readSettings({ ...previous, ...changes }, language);
   const bytes = new TextEncoder().encode('settings' + JSON.stringify(settings)).length;
@@ -124,9 +132,12 @@ export function composeShare(stored, { assistant, reply, kind = 'reply' }, langu
   // their own defaults, so existing reply settings never mislabel a user prompt.
   const settings = readSettings(typeof stored === 'string' ? { shareMessage: stored } : stored, language);
   const key = { reply: 'shareMessage', prompt: 'promptMessage', conversation: 'conversationMessage' }[kind];
-  const message = settings[key];
-  const template = /\{(reply|content)\}/.test(message) ? message : `${message.trimEnd()}\n\n{content}`;
-  return template.replace(/\{(assistant|reply|content)\}/g, (_, token) => token === 'assistant' ? assistant : reply).trim();
+  return formatShare(settings[key], { assistant, reply }).trim();
+}
+
+export function formatShare(message, { assistant, reply }) {
+  const template = /\{(reply|content)\}/.test(message) ? message.trim() : `${message.trim()}\n\n{content}`;
+  return template.replace(/\{(assistant|reply|content)\}/g, (_, token) => token === 'assistant' ? assistant : reply);
 }
 
 // An instruction on its own still compares both answers. Never expand tokens in quoted answers.

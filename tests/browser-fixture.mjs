@@ -107,11 +107,12 @@ function context(provider, split) {
   };
 }
 
-// Mock extension-local reading preferences in the local preview only.
+// Mock extension-local reading preferences and saved instructions in this preview tab.
 const readingStorage = `(() => {
-  const data = JSON.parse(sessionStorage.getItem('fixture-reading') || '{}');
+  const read = () => JSON.parse(sessionStorage.getItem('fixture-reading') || '{}');
   const listeners = [];
   function save(key, value) {
+    const data = read();
     const before = data[key];
     if (value === undefined) delete data[key]; else data[key] = value;
     sessionStorage.setItem('fixture-reading', JSON.stringify(data));
@@ -119,8 +120,8 @@ const readingStorage = `(() => {
   }
   chrome.storage ||= {};
   chrome.storage.local = {
-    async get(keys) { return Object.fromEntries([].concat(keys).filter(key => key in data).map(key => [key, data[key]])); },
-    async getKeys() { return Object.keys(data); },
+    async get(keys) { const data = read(); return Object.fromEntries([].concat(keys).filter(key => key in data).map(key => [key, data[key]])); },
+    async getKeys() { return Object.keys(read()); },
     async set(obj) { for (const [key, value] of Object.entries(obj)) save(key, value); },
     async remove(key) { save(key); }
   };
@@ -146,7 +147,7 @@ const server = createServer(async (req, res) => {
     const layout = ['project', 'new'].includes(url.searchParams.get('layout')) ? url.searchParams.get('layout') : 'chat';
     const empty = (provider === 'chatgpt' && layout === 'project') || (provider === 'claude' && layout === 'new');
     const file = url.pathname.slice(1);
-    if (['i18n.js', 'i18n-zh-CN.js', 'adapters.js', 'content.js', 'popup.js', 'popup-reading.js', 'popup.css', 'reading.js', 'reading-turns.js', 'reading-width.js', 'providers.js', 'settings.js', 'reply-files.js', 'download-capture.js'].includes(file)) {
+    if (['i18n.js', 'i18n-zh-CN.js', 'adapters.js', 'content.js', 'popup.js', 'popup-reading.js', 'popup-instructions.js', 'popup-actions.js', 'popup.css', 'reading.js', 'reading-turns.js', 'reading-width.js', 'providers.js', 'settings.js', 'instructions.js', 'actions.js', 'reply-files.js', 'download-capture.js'].includes(file)) {
       let source = await readFile(new URL(`../extension/${file}`, import.meta.url), 'utf8');
       if (file === 'adapters.js') source = source.replace('hosts.includes(location.hostname)', `hosts.includes(${JSON.stringify(hosts[provider])})`);
       res.setHeader('Content-Type', file.endsWith('.css') ? 'text/css' : 'text/javascript');
@@ -189,7 +190,7 @@ const server = createServer(async (req, res) => {
         :root {color-scheme:${dark ? 'dark' : 'light'};${Object.entries(looks[provider][dark ? 'dark' : 'light']).map(([key, value]) => `--${key}:${value}`).join(';')}}
         body {margin:0;font:16px/1.6 ${looks[provider].font};color:var(--fg);background:var(--page)}
         main {max-width:720px;margin:0 auto;padding:16px 20px 40px}
-        nav {display:flex;gap:14px;font-size:13px;padding:10px 0 24px;color:var(--muted)} nav a {color:inherit}
+        nav {display:flex;flex-wrap:wrap;gap:6px 14px;font-size:13px;padding:10px 0 24px;color:var(--muted)} nav a {color:inherit}
         .user {margin:24px 0 24px auto;width:fit-content;max-width:70%;padding:10px 16px;border-radius:18px;background:var(--bubble)}
         .prompt-turn {display:block;margin-bottom:24px}.prompt-turn .user {margin-bottom:5px}.prompt-turn .actions {justify-content:flex-end}
         .turn {display:block;margin-bottom:24px} .turn p {margin:0 0 12px} ${provider === 'claude' ? '.turn p {font-family:Georgia,serif}' : ''}
@@ -233,14 +234,33 @@ const server = createServer(async (req, res) => {
         const named = ids => ids.map(id => fixtureContext.chats.find(chat => chat.id === id).name).join(' and ');
         const record = m => { document.getElementById('destination').value = JSON.stringify(m, null, 2); };
         window.chrome = {runtime:{id:'fixture',onMessage:{addListener(){}},async sendMessage(m){
-          if (m.type === 'ASB_CONTEXT') return fixtureContext;
+          if (m.type === 'ASB_CONTEXT') {
+            const {readInstructions} = await import('/instructions.js');
+            const {loadSettings} = await import('/settings.js');
+            const {readActions} = await import('/actions.js');
+            const language = AISplitI18n.language;
+            const settings = await loadSettings(chrome.storage.sync, language);
+            const actions = (await readActions(chrome.storage, language, settings)).map(({id,kind,title,isDefault,builtin})=>({id,kind,title,isDefault,builtin}));
+            const presets = await readInstructions(chrome.storage.local);
+            return {...fixtureContext, shareMode:settings.shareMode, actions, instructions:presets.map(({id,title,kind,useByDefault})=>({id,title,kind,useByDefault}))};
+          }
+          if (m.type === 'ASB_OPEN_ACTION_EDITOR' && ['reply','prompt','review'].includes(m.kind)) {
+            location.assign('/popup.html?addAction='+m.kind);
+            return {ok:true};
+          }
           if (m.type === 'ASB_COMPARE_STATUS') return {ok:true,ready:true,turns:['fixture-left','fixture-right']};
           if (m.type === 'ASB_REVIEW_STATUS') {
             const ready = fixtureContext.native && ${JSON.stringify(!empty)};
             return {ok:true,ready,turns:['fixture-left','fixture-right'],revision:simulatedReview,
               message:ready ? '' : 'Open a split fixture with completed answers.'};
           }
-          record(m);
+          if (m.type === 'ASB_SHARE' || m.type === 'ASB_CROSS_REVIEW') {
+            const {instructionBlock} = await import('/instructions.js');
+            const kind = m.type === 'ASB_SHARE' ? m.kind || 'reply' : 'review';
+            const {readActions,resolveAction} = await import('/actions.js');
+            const action = ['reply','prompt','review'].includes(kind) && resolveAction(await readActions(chrome.storage, AISplitI18n.language), kind, m.actionId ?? m.action);
+            record({...m, ...(action && {action:action.title, actionPrompt:action.prompt}), appliedInstructions:await instructionBlock(chrome.storage.local, kind, m)});
+          } else record(m);
           if (m.type === 'ASB_CROSS_REVIEW') {
             simulatedReview = {reviewId:'fixture-round',turns:['fixture-critique-left','fixture-critique-right']};
             return {ok:true,message:'Fixture: both critiques simulated. Open Cross-review to choose a revision.'};
@@ -254,6 +274,7 @@ const server = createServer(async (req, res) => {
             return {ok:true,message:'Fixture: ' + reviewer + ' would compare both answers.'};
           }
           if (m.type === 'ASB_SEND') return {ok:true,message:'Fixture: would send to ' + named(m.targetIds) + '. Nothing sent.'};
+          if (m.type === 'ASB_SUMMARIZE') return {ok:true,message:m.send ? 'Fixture: the summary request would be sent to this chat.' : 'Fixture: the summary request would be added as a draft.'};
           if (m.type === 'ASB_SHARE') return {ok:true,message:'Fixture: the reply would be shared. Nothing sent.'};
           if (m.type === 'ASB_SHOW') return {ok:true,message:'Fixture: no tabs changed.'};
           return {ok:false,error:'This local fixture does not handle ' + m.type + '.'};

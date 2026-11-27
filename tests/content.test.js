@@ -14,7 +14,15 @@ const page = `<main>
 
 function split() {
   return {
-    ok: true, selfId: 1, provider: 'chatgpt', side: 'left', native: true, canManageSplit: false, switchMode: 'navigate',
+    ok: true, selfId: 1, provider: 'chatgpt', side: 'left', native: true, shareMode: 'send', canManageSplit: false, switchMode: 'navigate',
+    actions: [
+      { id: 'review-reply', kind: 'reply', title: 'Review reply', isDefault: true, builtin: true },
+      { id: 'handoff', kind: 'reply', title: 'Share as context', isDefault: false, builtin: true },
+      { id: 'respond', kind: 'prompt', title: 'Answer prompt', isDefault: true, builtin: true },
+      { id: 'critique', kind: 'review', title: 'Critique', isDefault: true, builtin: true },
+      { id: 'errors', kind: 'review', title: 'Find errors', isDefault: false, builtin: true },
+      { id: 'improvements', kind: 'review', title: 'Suggest improvements', isDefault: false, builtin: true },
+    ],
     peer: { id: 2, provider: 'claude', name: 'Claude', title: 'Chat two', side: 'right' },
     chats: [
       { id: 2, provider: 'claude', name: 'Claude', title: 'Chat two', side: 'right' },
@@ -70,7 +78,14 @@ function setup(t, context = split()) {
   const sent = type => calls.filter(message => message.type === type);
   const refresh = () => new Promise(resolve => listener({ type: 'ASB_REFRESH' }, { id: 'extension' }, resolve));
   const click = async node => { node.click(); await settle(); };
-  return { dom, document, model, adapter, calls, hosts, composer, pill, menu, toast, row, sent, refresh, click, get listener() { return listener; } };
+  const option = name => [...menu.querySelectorAll('.share-destination option')].find(item => item.textContent.startsWith(name + ' ·'));
+  const choose = name => {
+    const selected = option(name);
+    selected.parentElement.value = selected.value;
+    selected.parentElement.dispatchEvent(new dom.window.Event('change'));
+  };
+  const action = id => menu.querySelector(`[data-action-id="${id}"]`);
+  return { dom, document, model, adapter, option, choose, action, calls, hosts, composer, pill, menu, toast, row, sent, refresh, click, get listener() { return listener; } };
 }
 
 test('a Send both pill sits just before the site’s own Send button and leaves the site’s send alone', async t => {
@@ -152,26 +167,30 @@ test('hidden and closed chats can be shown on the other side; outside a split th
   assert.equal(view.row('Grok').querySelector('.detail').textContent, 'Asleep · open its tab first');
 });
 
+const directReply = { type: 'ASB_SHARE', targetId: 2, peerId: 2, peerProvider: 'claude', expectedMode: 'send',
+  page: 'https://chatgpt.com/c/example', actionId: 'review-reply' };
+
 test('each reply gets a Share button after its Copy button that hands the reply to the chosen chat', async t => {
   const view = setup(t);
   await settle();
   const shares = view.hosts('share');
   assert.equal(shares.length, 2);
   assert.deepEqual(shares.map(node => node.previousSibling.className), ['copy', 'copy']);
-  await view.click(shares[0].shadowRoot.querySelector('.share-button'));
+  await view.click(shares[0].shadowRoot.querySelector('.share-options'));
   assert.equal(view.menu.querySelector('.heading').textContent, 'Send this reply to');
   assert.match(view.menu.querySelector('.hint').textContent, /^Sent right away/);
-  assert.equal(view.row('Claude').querySelector('.detail').textContent, 'Right side · Chat two');
-  assert.equal(view.row('Gemini').querySelector('.detail').textContent, 'Opens on the right · Trip ideas');
-  assert.equal(view.row('Grok').querySelector('.detail').textContent, 'Opens on the right');
-  assert.equal(view.row('Grok').disabled, false, 'a sleeping hidden tab is opened, not skipped');
-  await view.click(view.row('Gemini'));
-  assert.deepEqual(view.sent('ASB_SHARE'), [{ type: 'ASB_SHARE', targetId: 3, reply: 'First answer.' }],
+  assert.equal(view.option('Claude').textContent, 'Claude · Right side · Chat two');
+  assert.equal(view.option('Gemini').textContent, 'Gemini · Opens on the right · Trip ideas');
+  assert.equal(view.option('Grok').textContent, 'Grok · Opens on the right');
+  assert.equal(view.option('Grok').disabled, false, 'a sleeping hidden tab is opened, not skipped');
+  view.choose('Gemini');
+  await view.click(view.action('review-reply'));
+  assert.deepEqual(view.sent('ASB_SHARE'), [{ type: 'ASB_SHARE', targetId: 3, actionId: 'review-reply', expectedMode: 'send', reply: 'First answer.', instructionIds: [] }],
     'the page sends only the reply; the extension adds your message');
   assert.equal(view.calls.some(message => ['ASB_SEND', 'ASB_COMMIT'].includes(message.type)), false);
   view.model.context = { ...split(), shareMode: 'draft' };
   await view.refresh();
-  await view.click(shares[1].shadowRoot.querySelector('.share-button'));
+  await view.click(shares[1].shadowRoot.querySelector('.share-options'));
   assert.equal(view.menu.querySelector('.heading').textContent, 'Share this reply with');
   assert.match(view.menu.querySelector('.hint').textContent, /^Added as a draft/);
   view.model.context = split();
@@ -181,7 +200,74 @@ test('each reply gets a Share button after its Copy button that hands the reply 
   view.model.context = { ...split(), chats: [], closed: [] };
   await view.refresh();
   assert.equal(view.hosts('share')[0].style.display, 'none');
-  assert.equal(view.composer().style.display, 'none');
+  assert.equal(view.pill().querySelector('.send').textContent, 'Summarize…');
+});
+
+test('primary Share sends one selected reply to the visible peer, including its recognized files', async t => {
+  const view = setup(t);
+  await settle();
+  const primary = view.hosts('share')[0].shadowRoot.querySelector('.share-primary');
+  const descriptors = [{ name: 'notes.md' }];
+  const files = [{ name: 'notes.md', data: 'bm90ZXM=' }];
+  const downloaded = [];
+  view.adapter.readReply = async () => ({ text: 'First answer.', files: descriptors });
+  view.adapter.readReplyFiles = async items => {
+    downloaded.push(items);
+    return files;
+  };
+  assert.equal(primary.textContent, 'Share to Claude');
+  primary.click();
+  primary.click();
+  await settle();
+  const direct = { type: 'ASB_SHARE', targetId: 2, peerId: 2, peerProvider: 'claude',
+    expectedMode: 'send', page: view.dom.window.location.href };
+  assert.deepEqual(view.sent('ASB_SHARE'), [{ ...direct, reply: 'First answer.', files }]);
+  assert.deepEqual(downloaded, [descriptors]);
+  assert.equal(view.menu.hidden, true);
+
+  view.model.context = { ...split(), shareMode: 'draft' };
+  await view.refresh();
+  assert.equal(primary.textContent, 'Draft for Claude');
+  view.adapter.readReply = async () => ({ text: 'highlight', partial: true, files: descriptors });
+  await view.click(primary);
+  assert.deepEqual(view.sent('ASB_SHARE')[1], { ...direct, expectedMode: 'draft', reply: 'highlight' });
+  assert.equal(downloaded.length, 1, 'an excerpt excludes the files from the whole reply');
+});
+
+test('primary Share checks that the same peer and mode still apply', async t => {
+  const view = setup(t);
+  await settle();
+  const primary = view.hosts('share')[0].shadowRoot.querySelector('.share-primary');
+  view.model.context = { ...split(), shareMode: 'draft' };
+  await view.click(primary);
+  assert.equal(view.sent('ASB_SHARE').length, 0);
+  assert.equal(primary.textContent, 'Draft for Claude');
+  view.model.context = { ...view.model.context, peer: { ...split().chats[1], side: 'right' } };
+  await view.click(primary);
+  assert.equal(view.sent('ASB_SHARE').length, 0);
+  assert.equal(primary.textContent, 'Draft for Gemini');
+  assert.match(view.toast.textContent, /changed/);
+});
+
+test('when there is no ready native peer, primary Share opens the chooser', async t => {
+  const view = setup(t);
+  await settle();
+  const host = view.hosts('share')[0].shadowRoot;
+  for (const context of [
+    { ...split(), peer: null, side: null, native: false, chats: split().chats.map(chat => ({ ...chat, side: null })) },
+    { ...split(), peer: { ...split().peer, loading: true } },
+  ]) {
+    view.model.context = context;
+    await view.refresh();
+    const primary = host.querySelector('.share-primary');
+    assert.equal(primary.textContent, 'Share with…');
+    assert.equal(host.querySelector('.share-options').hidden, true);
+    await view.click(primary);
+    assert.ok(view.option('Gemini'));
+    assert.equal(view.action('review-reply').disabled, true);
+    assert.equal(view.sent('ASB_SHARE').length, 0);
+    await view.click(primary);
+  }
 });
 
 test('a menu that fits on neither side opens on the roomier side and scrolls instead of covering its button', async t => {
@@ -189,7 +275,7 @@ test('a menu that fits on neither side opens on the roomier side and scrolls ins
   await settle();
   Object.defineProperty(view.dom.window, 'innerHeight', { value: 440, configurable: true });
   Object.defineProperty(view.menu, 'offsetHeight', { get: () => 255, configurable: true });
-  const share = view.hosts('share')[0].shadowRoot.querySelector('.share-button');
+  const share = view.hosts('share')[0].shadowRoot.querySelector('.share-options');
   share.getBoundingClientRect = () => ({ top: 162, bottom: 194, left: 60, right: 160 });
   await view.click(share);
   assert.equal(view.menu.style.top, '202px');
@@ -207,9 +293,9 @@ test('without Copy buttons the chooser can still share the latest reply', async 
   view.adapter.replyAnchors = () => [];
   await view.refresh();
   await view.click(view.pill().querySelector('.more'));
-  await view.click(view.menu.querySelector('.link'));
+  await view.click([...view.menu.querySelectorAll('.link')].find(link => link.textContent === 'Share this chat’s latest reply…'));
   assert.equal(view.menu.querySelector('.heading').textContent, 'Send this reply to');
-  await view.click(view.row('Claude'));
+  await view.click(view.action('review-reply'));
   assert.equal(view.sent('ASB_SHARE')[0].reply, 'Second answer.');
   assert.equal(view.sent('ASB_SHARE')[0].targetId, 2);
 });
@@ -225,8 +311,8 @@ test('Gemini keeps Share latest in its composer menu even if only an older toolb
   await view.click(view.pill().querySelector('.more'));
   const latest = [...view.menu.querySelectorAll('button')].find(node => node.textContent === 'Share this chat’s latest reply…');
   await view.click(latest);
-  await view.click(view.row('Claude'));
-  assert.deepEqual(view.sent('ASB_SHARE'), [{ type: 'ASB_SHARE', targetId: 2, reply: 'Second answer.' }]);
+  await view.click(view.action('review-reply'));
+  assert.deepEqual(view.sent('ASB_SHARE'), [{ ...directReply, reply: 'Second answer.', instructionIds: [] }]);
 });
 
 test('Compare beside the latest reply lets either split side review only after an explicit choice', async t => {
@@ -304,13 +390,13 @@ test('Cross-review offers all three review actions and submits only the selected
     await view.click(view.hosts('share').at(-1).shadowRoot.querySelector('.review-options'));
     assert.deepEqual(view.sent('ASB_REVIEW_STATUS').at(-1), { type: 'ASB_REVIEW_STATUS', peerId: 2 });
     assert.equal(view.sent('ASB_CROSS_REVIEW').length, count, 'opening the menu transfers nothing');
-    assert.match(view.menu.querySelector('.hint').textContent, mode === 'send' ? /Sends each answer/ : /draft to each chat/);
+    assert.match(view.menu.querySelector('.hint').textContent, mode === 'send' ? /Each assistant receives the selected action/ : /draft in each chat/);
     assert.equal(view.row('Claude'), undefined, 'revision is unavailable before the two critiques arrive');
     await view.click(view.row(label));
     assert.equal(view.menu.hidden, true);
     assert.deepEqual(view.sent('ASB_CROSS_REVIEW').at(-1), {
       type: 'ASB_CROSS_REVIEW', peerId: 2, peerProvider: 'claude', expectedMode: mode,
-      turns: ['local-turn', 'peer-turn'], action,
+      turns: ['local-turn', 'peer-turn'], actionId: action, instructionIds: [],
     });
   }
   assert.equal(view.sent('ASB_REVISE').length, 0);
@@ -324,7 +410,7 @@ test('both matching critiques unlock a revision in the chosen split pane', async
   await view.click(view.pill().querySelector('.more'));
   await view.click(view.menu.querySelector('.cross-review'));
   assert.match(view.menu.textContent, /Waiting for the other critique/);
-  assert.equal(view.menu.querySelector('button.row'), null);
+  assert.ok(view.action('errors').disabled);
   const revision = { reviewId: 'session-1', turns: ['critique1', 'critique2'] };
   view.model.reviewStatus = { ok: true, ready: true, turns: ['latest1', 'latest2'], revision };
   await view.click(view.menu.querySelector('.link'));
@@ -354,7 +440,7 @@ test('the primary Cross-review button requests one mutual critique in one click'
   const view = setup(t, { ...split(), shareMode: 'draft' });
   await settle();
   const primary = view.hosts('share').at(-1).shadowRoot.querySelector('.cross-review');
-  assert.match(primary.title, /Draft a critique request in both chats/);
+  assert.match(primary.title, /Draft the review request in both chats/);
   let finish;
   const respond = view.model.respond.bind(view.model);
   view.model.respond = msg => msg.type === 'ASB_CROSS_REVIEW' ? new Promise(resolve => { finish = resolve; }) : respond(msg);
@@ -362,7 +448,7 @@ test('the primary Cross-review button requests one mutual critique in one click'
   assert.equal(primary.disabled, true);
   await view.click(primary);
   assert.deepEqual(view.sent('ASB_CROSS_REVIEW'), [{
-    type: 'ASB_CROSS_REVIEW', action: 'critique', turns: ['local-turn', 'peer-turn'],
+    type: 'ASB_CROSS_REVIEW', turns: ['local-turn', 'peer-turn'],
     peerId: 2, peerProvider: 'claude', expectedMode: 'draft',
   }]);
   finish({ ok: true, message: 'Drafts ready.' }); await settle();
@@ -509,13 +595,50 @@ test('historical prompts have a share action that preserves their role', async t
   await view.refresh();
   const host = view.hosts('share').find(node => node.dataset.shareRole === 'user');
   assert.equal(host.previousSibling.className, 'copy');
-  await view.click(host.shadowRoot.querySelector('.share-button'));
+  await view.click(host.shadowRoot.querySelector('.share-options'));
   assert.equal(view.menu.querySelector('.heading').textContent, 'Send this prompt to');
-  await view.click(view.row('Claude'));
-  assert.deepEqual(view.sent('ASB_SHARE'), [{type:'ASB_SHARE',targetId:2,reply:'My original question.',kind:'prompt'}]);
+  await view.click(view.action('respond'));
+  assert.deepEqual(view.sent('ASB_SHARE'), [{...directReply,actionId:'respond',reply:'My original question.',kind:'prompt',instructionIds:[]}]);
   assert.equal(view.sent('ASB_SEND').length,0);
   chat.prompt.remove();await view.refresh();
   assert.equal(view.hosts('share').filter(node=>node.dataset.shareRole==='user').length,0);
+});
+
+test('the prompt share menu accepts a matching original for an unavailable upload or shares text only', async t => {
+  const view = setup(t);
+  conversation(view);
+  const descriptor = { name: 'plan.pdf', nameKnown: true, promptAttachment: true, kind: 'unavailable' };
+  view.adapter.readMessage = async () => ({ prompt: true, text: 'Review this.', files: [descriptor] });
+  const picked = [];
+  view.adapter.readReplyFiles = async ([item]) => {
+    if (!item.pickedFile) throw new Error('Original unavailable.');
+    picked.push(item);
+    return [{ name: item.pickedFile.name, type: 'application/pdf', data: 'YWJj' }];
+  };
+  await view.refresh();
+  const host = view.hosts('share').find(node => node.dataset.shareRole === 'user').shadowRoot;
+  await view.click(host.querySelector('.share-primary'));
+  assert.equal(view.sent('ASB_SHARE').length, 0);
+  await view.click(host.querySelector('.share-options'));
+  const input = view.menu.querySelector('.prompt-originals input');
+  const pick = name => {
+    const file = new view.dom.window.File(['abc'], name);
+    Object.defineProperty(input, 'files', { configurable: true, value: [file] });
+    input.dispatchEvent(new view.dom.window.Event('change', { bubbles: true }));
+    return file;
+  };
+  pick('another.pdf');
+  assert.match(view.menu.querySelector('.prompt-originals [role=status]').textContent, /Choose the file named plan.pdf/);
+  const original = pick('plan.pdf');
+  await view.click(view.action('respond'));
+  assert.equal(picked[0].pickedFile, original);
+  assert.equal(picked[0].kind, 'local-prompt');
+  assert.equal(view.sent('ASB_SHARE')[0].files[0].data, 'YWJj');
+  await view.click(host.querySelector('.share-options'));
+  await view.click(view.menu.querySelector('.file-option input'));
+  await view.click(view.action('respond'));
+  assert.equal(view.sent('ASB_SHARE')[1].files, undefined);
+  assert.equal(picked.length, 1);
 });
 
 test('selected prompts and replies are read in conversation order and shared as one conversation', async t => {
@@ -611,10 +734,10 @@ test('the controls beside the composer and replies change language as soon as on
   const view = setup(t);
   await settle();
   const send = () => view.pill().querySelector('.send');
-  const shareButtons = () => view.hosts('share').map(host => host.shadowRoot.querySelector('.share-button'));
+  const shareButtons = () => view.hosts('share').map(host => host.shadowRoot.querySelector('.share-primary'));
   const latest = () => [...view.hosts('share').at(-1).shadowRoot.querySelectorAll('.share-button')].map(node => node.textContent);
   assert.equal(send().textContent, 'Send both');
-  assert.deepEqual(latest(), ['Share with…', 'Compare', 'Cross-review', '']);
+  assert.deepEqual(latest(), ['Share to Claude', '', 'Compare', 'Cross-review', '']);
 
   view.dom.window.AISplitI18n.choose('zh-CN');
   await settle();
@@ -622,9 +745,9 @@ test('the controls beside the composer and replies change language as soon as on
   assert.equal(send().title, '在这里发送，并同时发送到 Claude（Ctrl+Shift+Enter）');
   assert.equal(view.pill().querySelector('.more').getAttribute('aria-label'), '选择聊天和对话操作');
   assert.equal(view.hosts('share').length, 2, 'each reply keeps exactly one share control');
-  assert.deepEqual(latest(), ['分享到…', '对比', '互评', '']);
-  assert.equal(shareButtons()[0].title, '把这条回复分享到另一个聊天');
-  const [, compare, review, options] = view.hosts('share').at(-1).shadowRoot.querySelectorAll('.share-button');
+  assert.deepEqual(latest(), ['分享给 Claude', '', '对比', '互评', '']);
+  assert.match(shareButtons()[0].title, /^发送给 Claude/);
+  const [, , compare, review, options] = view.hosts('share').at(-1).shadowRoot.querySelectorAll('.share-button');
   assert.equal(compare.title, '对比两侧的最新回答');
   assert.equal(review.getAttribute('aria-label'), '让两个回答互评');
   assert.equal(options.title, '选择互评方式，或修订一个回答');
@@ -632,7 +755,7 @@ test('the controls beside the composer and replies change language as soon as on
   view.dom.window.AISplitI18n.choose('en');
   await settle();
   assert.equal(send().textContent, 'Send both');
-  assert.deepEqual(latest(), ['Share with…', 'Compare', 'Cross-review', '']);
+  assert.deepEqual(latest(), ['Share to Claude', '', 'Compare', 'Cross-review', '']);
   assert.equal(view.hosts('composer').length, 1);
 });
 
@@ -647,7 +770,7 @@ test('menus, their hints and notices are written in Chinese when it is chosen', 
   assert.equal(view.row('Gemini').querySelector('.detail').textContent, '其他标签页 · Trip ideas');
   assert.equal(view.row('Grok').querySelector('.detail').textContent, '已休眠 · 请先打开它的标签页');
   assert.equal(view.row('Gemini').querySelector('.show').title, '在右侧显示 Gemini');
-  assert.deepEqual([...view.menu.querySelectorAll('.footer .link')].map(node => node.textContent), ['对比最新回答…', '互评…']);
+  assert.deepEqual([...view.menu.querySelectorAll('.footer .link')].map(node => node.textContent), ['总结此对话…', '将最新回复作为上下文分享…', '对比最新回答…', '互评…']);
   assert.equal(view.menu.querySelector('.footer .hint').textContent, '按 Ctrl+Shift+Enter 发送到已勾选的聊天');
   await view.click(view.row('Gemini').querySelector('[role=menuitemcheckbox]'));
   assert.equal(view.menu.querySelector('.primary').textContent, '全部发送');
@@ -657,16 +780,16 @@ test('menus, their hints and notices are written in Chinese when it is chosen', 
   assert.equal(view.menu.querySelector('.primary').textContent, '选择一个聊天');
   await view.click(view.pill().querySelector('.more'));
 
-  const share = view.hosts('share')[0].shadowRoot.querySelector('.share-button');
+  const share = view.hosts('share')[0].shadowRoot.querySelector('.share-options');
   await view.click(share);
   assert.equal(view.menu.querySelector('.heading').textContent, '把这条回复发送到');
   assert.equal(view.menu.querySelector('.hint').textContent, '会连同你的分享消息立即发送。');
-  assert.equal(view.row('Gemini').querySelector('.detail').textContent, '将在右侧打开 · Trip ideas');
+  assert.equal(view.option('Gemini').textContent, 'Gemini · 将在右侧打开 · Trip ideas');
   await view.click(share);
 
   view.model.respond = message => message.type === 'ASB_CONTEXT' ? view.model.context : { ok: false };
-  await view.click(view.hosts('share')[0].shadowRoot.querySelector('.share-button'));
-  await view.click(view.row('Claude'));
+  await view.click(view.hosts('share')[0].shadowRoot.querySelector('.share-options'));
+  await view.click(view.action('review-reply'));
   assert.equal(view.toast.textContent, '无法完成该操作。');
 
   view.model.respond = message => message.type === 'ASB_CONTEXT' ? view.model.context : view.model.compareStatus;
@@ -675,4 +798,221 @@ test('menus, their hints and notices are written in Chinese when it is chosen', 
   assert.equal(view.menu.querySelector('.heading').textContent, '由谁来对比这两个最新回答？');
   assert.equal(view.menu.querySelector('.hint').textContent, '选定后，会把两个回答都发送到该聊天进行对比。');
   assert.equal(view.row('ChatGPT').querySelector('.detail').textContent, '左侧');
+});
+
+
+const instructionPresets = [
+  { id: 'reply-sources', kind: 'reply', title: 'Check sources' },
+  { id: 'reply-length', kind: 'reply', title: 'Keep it short' },
+  { id: 'review-counter', kind: 'review', title: 'Find a counterexample' },
+  { id: 'review-risk', kind: 'review', title: 'Flag risks' },
+];
+
+test('reply sharing passes checked instructions and a one-time addition, while context sharing keeps the original reply', async t => {
+  const view = setup(t, { ...split(), instructions: instructionPresets });
+  await settle();
+  const trigger = view.hosts('share')[0].shadowRoot.querySelector('.share-options');
+  await view.click(trigger);
+  const panel = view.menu.querySelector('details.instructions');
+  const checks = Array.from(panel.querySelectorAll('input'));
+  assert.deepEqual(checks.map(check => check.value), ['reply-sources', 'reply-length']);
+  checks.reverse().forEach(check => { check.checked = true; });
+  panel.querySelector('textarea').value = ' Keep the code examples. ';
+  await view.click(view.action('review-reply'));
+  assert.deepEqual(view.sent('ASB_SHARE'), [{
+    ...directReply, reply: 'First answer.',
+    instructionIds: ['reply-sources', 'reply-length'], instructionText: 'Keep the code examples.',
+  }]);
+  await view.click(trigger);
+  assert.equal(view.menu.querySelector('.share-context'), null, 'one context action is enough for an individual reply');
+  await view.click(view.action('handoff'));
+  assert.deepEqual(view.sent('ASB_SHARE').at(-1), { ...directReply, actionId: 'handoff', reply: 'First answer.', instructionIds: [] });
+});
+
+test('saved instructions appear in an open menu and a user can override defaults for one send', async t => {
+  const view = setup(t);
+  await settle();
+  const options = view.hosts('share')[0].shadowRoot.querySelector('.share-options');
+  await view.click(options);
+  const panel = view.menu.querySelector('details.instructions');
+  const oneTime = panel.querySelector('textarea');
+  oneTime.value = 'Keep page numbers.';
+  const preset = { id: 'sources', title: 'Check sources', kind: 'reply', useByDefault: true };
+  view.model.context = { ...split(), instructions: [preset] };
+  await view.refresh();
+  assert.equal(panel.open, false, 'supplemental instructions stay secondary to actions');
+  panel.open = true;
+  assert.equal(panel.querySelector('input').checked, true);
+  assert.equal(panel.querySelector('summary').textContent, 'Extra instructions · 1 selected');
+  await view.click(panel.querySelector('input'));
+  view.model.context.instructions = [
+    { ...preset, title: 'Cite sources' },
+    { id: 'extra', title: 'Be brief', kind: 'reply', useByDefault: true },
+    { id: 'prompt', title: 'Prompt only', kind: 'prompt', useByDefault: true },
+  ];
+  await view.refresh();
+  const checks = [...panel.querySelectorAll('input')];
+  assert.deepEqual(checks.map(box => [box.value, box.checked]), [['sources', false], ['extra', true]]);
+  assert.equal(checks[0].parentElement.textContent, 'Cite sources');
+  assert.equal(oneTime.value, 'Keep page numbers.');
+  await view.click(checks[1]);
+  await view.click(view.action('review-reply'));
+  assert.deepEqual(view.sent('ASB_SHARE'), [{ ...directReply, reply: 'First answer.',
+    instructionIds: [], instructionText: 'Keep page numbers.' }]);
+  await view.click(options);
+  assert.equal(view.menu.querySelectorAll('.instructions :checked').length, 2, 'the override only affects one send');
+});
+
+test('the cross-review menu applies the selected additions to its chosen mode', async t => {
+  const view = setup(t, { ...split(), instructions: instructionPresets, shareMode: 'draft' });
+  await settle();
+  const options = view.hosts('share').at(-1).shadowRoot.querySelector('.review-options');
+  await view.click(options);
+  const panel = view.menu.querySelector('.instructions');
+  assert.deepEqual(Array.from(panel.querySelectorAll('input'), check => check.value), ['review-counter', 'review-risk']);
+  panel.querySelectorAll('input').forEach(check => { check.checked = true; });
+  panel.querySelector('textarea').value = 'Check the numbers.';
+  await view.click(view.row('Find errors'));
+  assert.deepEqual(view.sent('ASB_CROSS_REVIEW'), [{
+    type: 'ASB_CROSS_REVIEW', peerId: 2, peerProvider: 'claude', expectedMode: 'draft',
+    actionId: 'errors', turns: ['local-turn', 'peer-turn'], instructionIds: ['review-counter', 'review-risk'],
+    instructionText: 'Check the numbers.',
+  }]);
+});
+
+test('the composer can request or draft a summary in a single chat', async t => {
+  const view = setup(t, { ...split(), chats: [], closed: [], peer: null, native: false });
+  await settle();
+  const summary = view.pill().querySelector('.send');
+  assert.equal(summary.textContent, 'Summarize…');
+  assert.equal(view.pill().querySelector('.more').hidden, true);
+  for (const [selector, send] of [['.link', false], ['.primary', true]]) {
+    await view.click(summary);
+    assert.equal(view.menu.querySelector('.heading').textContent, 'Summarize this chat');
+    await view.click(view.menu.querySelector(selector));
+    assert.deepEqual(view.sent('ASB_SUMMARIZE').at(-1), { type: 'ASB_SUMMARIZE', send, page: 'https://chatgpt.com/c/example' });
+  }
+  assert.equal(view.sent('ASB_SEND').length, 0);
+});
+
+test('the composer shares the latest reply as context and refuses a summary after navigation', async t => {
+  const view = setup(t);
+  await settle();
+  const menu = view.pill().querySelector('.more');
+  await view.click(menu);
+  await view.click(view.menu.querySelector('.share-context'));
+  await view.click(view.row('Claude'));
+  assert.deepEqual(view.sent('ASB_SHARE'), [{ type: 'ASB_SHARE', targetId: 2, reply: 'Second answer.', kind: 'handoff' }]);
+  await view.click(menu);
+  await view.click(view.menu.querySelector('.summarize'));
+  view.dom.window.history.pushState({}, '', '/c/other');
+  await view.click(view.menu.querySelector('.primary'));
+  assert.equal(view.sent('ASB_SUMMARIZE').length, 0);
+  assert.match(view.toast.textContent, /conversation changed/i);
+});
+
+test('custom actions run from the same list as built-ins in the matching share or review workflow', async t => {
+  const state = split();
+  state.actions.push(
+    { id: 'citations', kind: 'reply', title: 'Check citations', isDefault: true, builtin: false },
+    { id: 'translate', kind: 'prompt', title: 'Translate to Japanese', isDefault: false, builtin: false },
+    { id: 'counterexample', kind: 'review', title: 'Find a counterexample', isDefault: false, builtin: false },
+  );
+  state.actions[0].isDefault = false;
+  const view = setup(t, state);
+  conversation(view);
+  await view.refresh();
+
+  const reply = view.hosts('share').find(host => host.dataset.shareRole === 'assistant').shadowRoot;
+  const prompt = view.hosts('share').find(host => host.dataset.shareRole === 'user').shadowRoot;
+  const review = view.document.querySelectorAll('article.reply')[1].querySelector('[data-share-role=assistant]').shadowRoot;
+  assert.match(reply.querySelector('.share-primary').title, /Check citations/);
+  await view.click(reply.querySelector('.share-options'));
+  const names = () => [...view.menu.querySelectorAll('.action-list .name')].map(node => node.textContent);
+  assert.deepEqual(names(), ['Review reply', 'Share as context', 'Check citations']);
+  assert.equal(view.action('citations').querySelector('.detail').textContent, 'Default');
+  assert.equal(view.option('Claude').selected, true);
+  view.action('citations').click();
+  view.action('citations').click();
+  await settle();
+  assert.deepEqual(view.sent('ASB_SHARE'), [{ ...directReply, actionId: 'citations', reply: 'First answer.', instructionIds: [] }]);
+
+  await view.click(prompt.querySelector('.share-options'));
+  assert.deepEqual(names(), ['Answer prompt', 'Translate to Japanese']);
+  view.choose('Gemini');
+  await view.click(view.action('translate'));
+  assert.deepEqual(view.sent('ASB_SHARE')[1], { type: 'ASB_SHARE', kind: 'prompt', actionId: 'translate', targetId: 3,
+    expectedMode: 'send', reply: 'My original question.', instructionIds: [] });
+
+  await view.click(review.querySelector('.review-options'));
+  assert.deepEqual(names(), ['Critique', 'Find errors', 'Suggest improvements', 'Find a counterexample']);
+  await view.click(view.action('counterexample'));
+  assert.deepEqual(view.sent('ASB_CROSS_REVIEW'), [{ type: 'ASB_CROSS_REVIEW', actionId: 'counterexample',
+    expectedMode: 'send', peerId: 2, peerProvider: 'claude', turns: ['local-turn', 'peer-turn'], instructionIds: [] }]);
+});
+
+test('open menus reflect action renames and deletions while keeping the chosen destination and one-time text', async t => {
+  const view = setup(t);
+  await settle();
+  const options = view.hosts('share')[0].shadowRoot.querySelector('.share-options');
+  await view.click(options);
+  view.choose('Gemini');
+  const extras = view.menu.querySelector('.instructions textarea');
+  extras.value = 'Keep equations.';
+  view.model.context.actions.push({ id: 'math', title: 'Check math', kind: 'reply', builtin: false, isDefault: false });
+  await view.refresh();
+  const original = view.action('math');
+  original.focus();
+  view.model.context.actions = view.model.context.actions.map(a => a.id === 'math' ? { ...a, title: 'Verify calculations' } : a);
+  await view.refresh();
+  assert.equal(view.action('math').querySelector('.name').textContent, 'Verify calculations');
+  assert.equal(view.action('math').getRootNode().activeElement, view.action('math'));
+  assert.ok(view.option('Gemini').selected);
+  const renamed = view.action('math');
+  view.model.context.actions = view.model.context.actions.filter(a => a.id !== 'math');
+  await view.refresh();
+  assert.equal(view.action('math'), null);
+  await view.click(renamed);
+  assert.equal(view.sent('ASB_SHARE').length, 0);
+  await view.click(view.action('review-reply'));
+  assert.equal(view.sent('ASB_SHARE')[0].targetId, 3);
+  assert.equal(view.sent('ASB_SHARE')[0].instructionText, 'Keep equations.');
+});
+
+test('Add action opens the correct editor without sending, including when cross-review is unavailable', async t => {
+  const view = setup(t);
+  conversation(view);
+  await view.refresh();
+  const reply = view.hosts('share').find(node => node.dataset.shareRole === 'assistant').shadowRoot;
+  const prompt = view.hosts('share').find(node => node.dataset.shareRole === 'user').shadowRoot;
+  for (const root of [reply, prompt]) {
+    await view.click(root.querySelector('.share-options'));
+    await view.click(view.menu.querySelector('.add-action'));
+    assert.equal(view.menu.hidden, true);
+  }
+  view.model.reviewStatus = { ok: true, ready: false };
+  const latest = view.hosts('share').find(node => node.shadowRoot.querySelector('.review-options'));
+  await view.click(latest.shadowRoot.querySelector('.review-options'));
+  assert.ok(view.action('critique').disabled);
+  await view.click(view.menu.querySelector('.add-action'));
+  assert.deepEqual(view.sent('ASB_OPEN_ACTION_EDITOR').map(m => m.kind), ['reply', 'prompt', 'review']);
+  assert.equal(view.sent('ASB_CROSS_REVIEW').length + view.sent('ASB_SHARE').length, 0);
+});
+
+test('sharing an action after a peer or delivery mode change stops without sending', async t => {
+  const view = setup(t);
+  await settle();
+  const options = view.hosts('share')[0].shadowRoot.querySelector('.share-options');
+  await view.click(options);
+  view.model.context = { ...split(), peer: null, side: null, native: false };
+  await view.click(view.action('review-reply'));
+  assert.equal(view.sent('ASB_SHARE').length, 0);
+  assert.match(view.toast.textContent, /changed/);
+  view.model.context = split();
+  await view.refresh();
+  await view.click(options);
+  view.choose('Gemini');
+  view.model.context.shareMode = 'draft';
+  await view.click(view.action('review-reply'));
+  assert.equal(view.sent('ASB_SHARE').length, 0);
 });

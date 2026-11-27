@@ -96,10 +96,11 @@
     .pill button:not(:disabled):hover,.share-button:hover { background:color-mix(in srgb,currentColor 8%,transparent); }
     .share-button { display:inline-flex; align-items:center; gap:6px; height:var(--size,32px); padding:0 10px 0 8px; border:0;
       border-radius:var(--radius,var(--share-radius)); background:transparent; color:var(--ink,inherit); font-size:13px; white-space:nowrap; }
-    .review-actions { display:inline-flex; align-items:center; }
-    .review-actions .cross-review { padding-inline-end:4px; }
-    .review-actions .review-options { padding:0 4px; }
-    .review-options .icon { width:14px; height:14px; transform:rotate(180deg); }
+    .share-actions,.review-actions { display:inline-flex; align-items:center; }
+    .share-actions.paired .share-primary,.review-actions .cross-review { padding-inline-end:3px; }
+    .share-actions .share-options,.review-actions .review-options { min-width:24px; padding:0 4px; justify-content:center; }
+    .share-options[hidden] { display:none; }
+    .share-options .icon,.review-options .icon { width:14px; height:14px; transform:rotate(180deg); }
     @media (max-width:640px) {
       .root.share { flex-wrap:wrap; max-width:100%; }
       .share-button { padding-inline:6px; }
@@ -113,6 +114,14 @@
     .row { flex:1; min-width:0; display:flex; align-items:center; gap:10px; min-height:46px; padding:6px 10px; border:0; border-radius:var(--item-radius);
       background:none; color:inherit; text-align:left; }
     .menu > .row { width:100%; }
+    .share-destination { display:block; width:calc(100% - 20px); margin:0 10px 6px; border:1px solid var(--line); border-radius:var(--item-radius);
+      padding:6px; color:var(--fg); background:var(--bg); font:inherit; }
+    .action-head { display:flex; align-items:center; justify-content:space-between; gap:8px; margin:4px 10px; }
+    .action-head .heading { padding:0; }
+    .action-head .link { width:auto; margin:0; padding:4px 6px; }
+    .action-list { max-height:180px; overflow-y:auto; overscroll-behavior:contain; }
+    .action-list .row { width:100%; min-height:32px; overflow-wrap:anywhere; }
+    .action-list .name { flex:1; } .action-list .detail { flex:none; }
     button.row:not(:disabled):hover,.show:hover,.link:hover { background:var(--hover); }
     .tick { width:18px; height:18px; flex:none; display:grid; place-items:center; color:var(--accent); }
     .tick .icon { width:18px; height:18px; stroke-width:2; visibility:hidden; }
@@ -129,6 +138,19 @@
     .menu > .hint { padding-bottom:6px; }
     .file-option { display:flex; align-items:center; gap:7px; padding:6px 10px 2px; font-size:13px; color:var(--fg); cursor:pointer; }
     .file-option input { margin:0; accent-color:var(--accent); }
+    .prompt-originals { margin:4px 10px 8px; font-size:12px; color:var(--muted); }
+    .prompt-originals label { display:block; overflow-wrap:anywhere; margin-top:6px; }
+    .prompt-originals input { display:block; max-width:100%; margin-top:4px; color:var(--fg); font:inherit; }
+    .instructions { margin:4px 10px 6px; padding:5px 0 7px; border-bottom:1px solid var(--line); }
+    .instructions summary { color:var(--fg); cursor:pointer; padding:4px 0; font-size:13px; }
+    .instruction-list { max-height:104px; overflow-y:auto; overscroll-behavior:contain; }
+    .instructions .file-option { padding-inline:0; overflow-wrap:anywhere; }
+    .instructions textarea { display:block; width:100%; margin-top:6px; padding:7px 8px; min-height:34px; max-height:120px; field-sizing:content; resize:vertical;
+      font:inherit; font-size:13px; color:inherit; background:transparent; border:1px solid var(--line); border-radius:8px; }
+    .instruction-hint { margin:6px 0 0; font-size:12px; color:var(--muted); }
+    .instructions textarea::placeholder { color:var(--muted); }
+    .menu > .link { margin-block:3px; }
+    .body-hint { padding-block-end:8px; text-align:start; }
     .file-names { margin:0 10px 5px; padding:3px 0 9px; border-bottom:1px solid var(--line); color:var(--muted); font-size:12px; overflow-wrap:anywhere; }
     .message-list { max-height:260px; overflow:auto; overscroll-behavior:contain; }
     .message-choice { display:flex; align-items:flex-start; gap:9px; padding:9px 10px; border-radius:var(--item-radius); cursor:pointer; }
@@ -281,6 +303,10 @@
     const next = await request({ type: 'ASB_CONTEXT' });
     if (sequence !== refreshSequence) return;
     context = next;
+    if (isOpen(menu)) {
+      if (openInstructions?.node.isConnected) openInstructions.update();
+      if (openActions?.node.isConnected) openActions.update();
+    }
     const keys = new Set(context.chats.map(choiceKey));
     for (const key of chosen.keys()) if (!keys.has(key)) chosen.delete(key);
     scan();
@@ -324,25 +350,33 @@
   moreButton.setAttribute('aria-haspopup', 'menu');
   pill.append(sendButton, moreButton);
   composer.root.append(pill);
-  let composerFloating = false;
+  let composerFloating = false, controlsBusy = false;
 
   function renderComposer(look) {
-    for (const trigger of [compareButton, quickReview, reviewOptions]) trigger.disabled = pending;
-    const shown = !!context?.chats.length && composer.node.isConnected;
+    if (controlsBusy !== pending) {
+      controlsBusy = pending;
+      for (const trigger of [compareButton, quickReview, reviewOptions]) trigger.disabled = pending;
+      for (const views of [shares, prompts]) for (const view of views.values()) view.setBusy(pending);
+    }
+    const shown = !!context && composer.node.isConnected;
+    const solo = !context?.chats.length;
+    moreButton.hidden = solo;
+    moreButton.style.display = solo ? 'none' : '';
     composer.node.style.cssText = !shown ? 'display:none' : composerFloating
       ? 'display:inline-flex;position:fixed;right:20px;bottom:96px;z-index:2147483646' : 'display:inline-flex;align-items:center;flex:none';
     composer.root.classList.toggle('floating', composerFloating);
     if (!shown) return;
     paint(composer.root, look);
     const picked = targets();
-    sendText.textContent = pending ? t('Working…') : sendLabel(picked.length);
-    sendButton.title = picked.length
+    sendText.textContent = pending ? t('Working…') : solo ? t('Summarize…') : sendLabel(picked.length);
+    sendButton.title = solo ? t('Summarize this chat') : picked.length
       ? t('Send here and to {names} ({shortcut})', { names: i18n.list(picked.map(chat => chat.name)), shortcut: SHORTCUT })
       : t('Choose the chats to send to');
     sendButton.disabled = moreButton.disabled = pending;
   }
 
   function sendNow() {
+    if (!context?.chats.length) return toggleMenu(sendButton, renderSummaryMenu, true);
     const picked = targets();
     if (!picked.length) return toggleMenu(moreButton, renderSendMenu, true);
     closeLayer(menu);
@@ -406,15 +440,18 @@
     go.disabled = pending || !count;
     go.addEventListener('click', sendNow);
     footer.append(go);
+    const summary = button('link summarize', t('Summarize this chat…'));
+    summary.disabled = pending;
+    summary.addEventListener('click', renderSummaryMenu);
+    footer.append(summary);
+    const handoff = button('link share-context', t('Share latest reply as context…'));
+    handoff.disabled = pending;
+    handoff.addEventListener('click', () => shareLatest(true));
+    footer.append(handoff);
     // Gemini can expose action bars for older turns before the newest one has any controls.
     if (!shares.size || adapter.provider === 'gemini') {
       const latest = button('link', t('Share this chat’s latest reply…'));
-      latest.addEventListener('click', async () => {
-        let reply;
-        try { reply = await (adapter.readResponse ? adapter.readResponse() : adapter.getResponse()); } catch (error) { closeLayer(menu); return toast(pill, error.message, true); }
-        renderShareMenu(reply);
-        place(menu, menuAnchor, menuAbove);
-      });
+      latest.addEventListener('click', () => shareLatest(false));
       footer.append(latest);
     }
     if (adapter.messages && adapter.readMessages) {
@@ -435,6 +472,150 @@
     menu.append(footer);
   }
 
+  async function shareLatest(handoff) {
+    const anchor = menuAnchor, page = location.href;
+    try {
+      const reply = await (adapter.readResponse ? adapter.readResponse() : adapter.getResponse());
+      if (!isOpen(menu) || menuAnchor !== anchor || location.href !== page) return;
+      renderShareMenu(reply, { handoff });
+      place(menu, anchor, menuAbove);
+    } catch (error) {
+      closeLayer(menu);
+      toast(anchor, error.message, true);
+    }
+  }
+
+  function renderSummaryMenu() {
+    const page = location.href;
+    const heading = el('p', 'heading', t('Summarize this chat'));
+    const hint = el('p', 'hint body-hint', t('Ask this assistant for a handoff with the context, decisions, key outputs, and next steps.'));
+    const generate = button('primary', t('Generate summary'));
+    const draft = button('link', t('Add as a draft'));
+    for (const [trigger, send] of [[generate, true], [draft, false]]) {
+      trigger.disabled = pending;
+      trigger.addEventListener('click', () => {
+        const anchor = menuAnchor;
+        closeLayer(menu);
+        run(anchor, async () => {
+          if (location.href !== page) throw new Error(t('The conversation changed. Open the action again.'));
+          return request({ type: 'ASB_SUMMARIZE', send, page });
+        });
+      });
+    }
+    menu.replaceChildren(heading, hint, generate, draft);
+    place(menu, menuAnchor, menuAbove);
+  }
+
+  // The worker loads bodies for the selected IDs. The page receives only their titles.
+  let openInstructions;
+  function instructionOptions(kind) {
+    const node = el('details', 'instructions');
+    const title = el('summary');
+    const list = el('div', 'instruction-list');
+    const text = el('textarea');
+    text.rows = 1;
+    text.maxLength = 2000;
+    text.placeholder = t('One-time instruction');
+    text.setAttribute('aria-label', t('One-time instruction'));
+    const hint = el('p', 'instruction-hint');
+    node.append(title, list, text, hint);
+    const overrides = new Map();
+    let previous;
+    function labelSelection() {
+      const picked = list.querySelectorAll(':checked').length;
+      title.textContent = picked ? t('Extra instructions · {count} selected', { count: picked }) : t('Extra instructions');
+    }
+    function update() {
+      const items = (context.instructions || []).filter(item => item.kind === kind);
+      const signature = JSON.stringify(items);
+      if (signature === previous) return;
+      previous = signature;
+      const focus = node.getRootNode().activeElement;
+      const focusedId = list.contains(focus) ? focus.value : null;
+      list.replaceChildren(...items.map(item => {
+        const row = el('label', 'file-option');
+        const box = el('input');
+        box.type = 'checkbox';
+        box.value = item.id;
+        box.checked = overrides.get(item.id) ?? !!item.useByDefault;
+        box.addEventListener('change', () => {
+          overrides.set(item.id, box.checked);
+          labelSelection();
+        });
+        row.append(box, document.createTextNode(item.title));
+        return row;
+      }));
+      if (focusedId) Array.from(list.querySelectorAll('input')).find(box => box.value === focusedId)?.focus({ preventScroll: true });
+      hint.hidden = items.length > 0;
+      hint.textContent = t('Save reusable instructions in the extension popup.');
+      labelSelection();
+      if (node.isConnected && isOpen(menu)) place(menu, menuAnchor, menuAbove);
+    }
+    update();
+    node.addEventListener('toggle', () => {
+      if (node.isConnected && isOpen(menu)) place(menu, menuAnchor, menuAbove);
+    });
+    openInstructions = { node, update };
+    return {
+      node,
+      read: () => {
+        const instructionIds = Array.from(list.querySelectorAll(':checked'), box => box.value);
+        const instructionText = text.value.trim();
+        return { instructionIds, ...(instructionText && { instructionText }) };
+      },
+    };
+  }
+
+  // Names and IDs are enough to run a chosen action. The worker resolves its current prompt.
+  let openActions;
+  function addActionButton(kind) {
+    const add = button('link add-action', t('Add action…'));
+    add.addEventListener('click', async () => {
+      if (pending || add.disabled) return;
+      add.disabled = true;
+      const anchor = menuAnchor;
+      closeLayer(menu);
+      try { await request({ type: 'ASB_OPEN_ACTION_EDITOR', kind }); }
+      catch (error) { toast(anchor, error.message, true); }
+      finally { add.disabled = false; }
+    });
+    return add;
+  }
+  function actionRows(kind, invoke, enabled = () => true) {
+    const node = el('div', 'workflow-actions');
+    const head = el('div', 'action-head');
+    head.append(el('span', 'heading', t('Actions')), addActionButton(kind));
+    const list = el('div', 'action-list');
+    node.append(head, list);
+    let last;
+    function update() {
+      const actions = (context.actions || []).filter(action => action.kind === kind);
+      const signature = JSON.stringify(actions);
+      if (signature !== last) {
+        last = signature;
+        const focused = list.getRootNode().activeElement;
+        const focusedId = list.contains(focused) ? focused.dataset.actionId : null;
+        list.replaceChildren(...actions.map(action => {
+          const row = button('row');
+          row.dataset.actionId = action.id;
+          row.setAttribute('role', 'menuitem');
+          row.append(el('span', 'name', action.title));
+          if (action.isDefault) row.append(el('span', 'detail', t('Default')));
+          row.addEventListener('click', () => {
+            if (row.isConnected && isOpen(menu) && !pending && enabled()) invoke(action.id);
+          });
+          return row;
+        }));
+        if (focusedId) Array.from(list.children).find(row => row.dataset.actionId === focusedId)?.focus({ preventScroll: true });
+      }
+      for (const row of list.children) row.disabled = !enabled();
+      if (node.isConnected && isOpen(menu)) place(menu, menuAnchor, menuAbove);
+    }
+    update();
+    openActions = { node, update };
+    return openActions;
+  }
+
   async function toggleMenu(trigger, render, above) {
     const wasOpen = dismissedBy === trigger || (isOpen(menu) && menuAnchor === trigger);
     dismissedBy = null;
@@ -449,6 +630,9 @@
   }
   // A click on the trigger of an open menu first light-dismisses it; remember that so the click doesn't reopen it.
   moreButton.addEventListener('pointerdown', () => { dismissedBy = isOpen(menu) && menuAnchor === moreButton ? moreButton : null; });
+  sendButton.addEventListener('pointerdown', () => {
+    if (!context?.chats.length) dismissedBy = isOpen(menu) && menuAnchor === sendButton ? sendButton : null;
+  });
   sendButton.addEventListener('click', sendNow);
   moreButton.addEventListener('click', () => toggleMenu(moreButton, renderSendMenu, true));
   document.addEventListener('keydown', event => {
@@ -514,6 +698,7 @@
     if (!context.native || !peer) {
       note.textContent = crossReview ? t('Open two AI chats in Chrome Split View to cross-review their answers.')
         : t('Open two AI chats in Chrome Split View to compare their answers.');
+      if (crossReview) menu.append(actionRows('review', null, () => false).node);
       place(menu, menuAnchor, menuAbove);
       return;
     }
@@ -528,6 +713,7 @@
       const retry = button('link', t('Check again'));
       retry.addEventListener('click', () => renderPairMenu(action));
       menu.append(retry);
+      if (crossReview) menu.append(actionRows('review', null, () => false).node);
       place(menu, menuAnchor, menuAbove);
       return;
     }
@@ -549,20 +735,19 @@
     }
     const revision = crossReview && status.revision;
     if (crossReview && !revision && mode === 'quick') {
-      return submit({ type: 'ASB_CROSS_REVIEW', action: 'critique', turns: status.turns });
+      return submit({ type: 'ASB_CROSS_REVIEW', turns: status.turns });
     }
     if (crossReview && (!revision || mode === 'again')) {
       heading.textContent = t('How should the assistants review each other?');
-      for (const [action, title, detail] of [
-        ['critique', t('Critique'), t('Assess the reasoning and evidence.')],
-        ['errors', t('Find errors'), t('Look for mistakes and unsupported claims.')],
-        ['improvements', t('Suggest improvements'), t('Recommend specific changes.')],
-      ]) {
-        addChoice(title, detail, { type: 'ASB_CROSS_REVIEW', action, turns: status.turns });
-      }
+      const extras = instructionOptions('review');
+      const actions = actionRows('review', actionId => submit({
+        type: 'ASB_CROSS_REVIEW', actionId, turns: status.turns, ...extras.read(),
+      }));
+      menu.insertBefore(actions.node, note);
+      menu.insertBefore(extras.node, note);
       note.textContent = shareMode === 'draft'
-        ? t('Adds a review draft to each chat. Send both drafts to see the critiques side by side.')
-        : t('Sends each answer to the other chat. You can read both critiques side by side.');
+        ? t('Adds the selected action and the other answer as a draft in each chat.')
+        : t('Each assistant receives the selected action and the other assistant’s answer.');
     } else {
       const self = { id: selfId, side, name: adapter.name };
       heading.textContent = revision ? t('Revise an answer') : t('Who should compare the two latest answers?');
@@ -577,7 +762,7 @@
           : t('Both critiques are ready. Choose a chat to revise its original answer using the other assistant’s critique.');
         const again = button('link', t('Cross-review the latest replies again…'));
         again.addEventListener('click', () => renderPairMenu(action, 'again'));
-        menu.append(again);
+        menu.append(again, addActionButton('review'));
       } else {
         note.textContent = shareMode === 'draft'
           ? t('Choosing a reviewer adds an editable comparison prompt to that chat.')
@@ -659,76 +844,241 @@
     place(menu, menuAnchor, menuAbove);
   }
 
-  function renderShareMenu(reply) {
+  function renderShareMenu(reply, { handoff = false, includeFiles = true, originals = new Map() } = {}) {
+    const page = location.href;
+    const previous = { ...context };
+    const peer = quickSharePeer();
     const other = context.peer?.side;
     const draft = context.shareMode === 'draft';
-    const heading = draft
+    const heading = handoff ? t('Share as context with') : draft
       ? (reply.conversation ? t('Share the selected messages with') : reply.prompt ? t('Share this prompt with')
         : reply.partial ? t('Share the selected text with') : t('Share this reply with'))
       : (reply.conversation ? t('Send the selected messages to') : reply.prompt ? t('Send this prompt to')
         : reply.partial ? t('Send the selected text to') : t('Send this reply to'));
     menu.replaceChildren(el('p', 'heading', heading));
-    let includeFiles = true;
     if (reply.files?.length && !reply.partial) {
       const option = el('label', 'file-option');
       const checkbox = document.createElement('input');
       checkbox.type = 'checkbox';
-      checkbox.checked = true;
-      checkbox.addEventListener('change', () => { includeFiles = checkbox.checked; });
+      checkbox.checked = includeFiles;
+      checkbox.disabled = !(reply.textWithoutFiles ?? reply.text)?.trim();
       const count = reply.files.length;
       const include = reply.prompt || reply.conversation
         ? (count === 1 ? t('Include 1 file') : t('Include {count} files', { count }))
         : (count === 1 ? t('Include 1 generated file') : t('Include {count} generated files', { count }));
       option.append(checkbox, document.createTextNode(` ${include}`));
       menu.append(option, el('p', 'file-names', reply.files.map(file => file.name).join(', ')));
-    }
-    const add = (name, detail, disabled, choice) => {
-      const row = button('row');
-      row.setAttribute('role', 'menuitem');
-      row.disabled = pending || disabled;
-      row.append(label(name, detail));
-      row.addEventListener('click', () => {
-        closeLayer(menu);
-        run(menuAnchor, async () => {
-          const files = includeFiles && !reply.partial && reply.files?.length ? await adapter.readReplyFiles(reply.files) : [];
-          const kind = reply.conversation ? 'conversation' : reply.prompt ? 'prompt' : undefined;
-          return request({ type: 'ASB_SHARE', ...choice, reply: reply.text, ...(kind ? { kind } : {}), ...(files.length ? { files } : {}) });
-        });
+      const uploads = reply.files.filter(file => file.promptAttachment && file.kind !== 'local-prompt');
+      const pickers = el('div', 'prompt-originals');
+      if (uploads.length) {
+        const alternatives = el('details');
+        alternatives.append(el('summary', '', t('Choose original files…')));
+        for (const descriptor of uploads) {
+          const caption = t('Choose original for {file}', { file: descriptor.name });
+          const label = el('label', '', caption);
+          const input = el('input');
+          input.type = 'file';
+          input.setAttribute('aria-label', caption);
+          const status = el('span', '', originals.get(descriptor)?.name);
+          status.setAttribute('role', 'status');
+          input.addEventListener('change', () => {
+            originals.delete(descriptor);
+            status.textContent = '';
+            const file = input.files[0];
+            if (!file) return;
+            if (descriptor.nameKnown && descriptor.name !== file.name) {
+              status.textContent = t('Choose the file named {file}.', { file: descriptor.name });
+              input.value = '';
+              return;
+            }
+            originals.set(descriptor, file);
+          });
+          label.append(input, status);
+          if (descriptor.kind === 'unavailable') pickers.append(label);
+          else alternatives.append(label);
+        }
+        if (alternatives.children.length > 1) pickers.append(alternatives);
+        pickers.hidden = !includeFiles;
+        menu.append(pickers);
+      }
+      checkbox.addEventListener('change', () => {
+        includeFiles = checkbox.checked;
+        pickers.hidden = !includeFiles;
       });
-      menu.append(row);
-    };
-    const opens = other === 'left' ? t('Opens on the left') : t('Opens on the right');
-    for (const chat of context.chats) {
-      const direct = !!chat.side || !other;
-      add(chat.name, direct ? where(chat) : titled(opens, chat), direct && !available(chat), { targetId: chat.id });
     }
+    const opens = other === 'left' ? t('Opens on the left') : t('Opens on the right');
+    const destinations = context.chats.map(chat => {
+      const direct = !!chat.side || !other;
+      return { name: chat.name, detail: direct ? where(chat) : titled(opens, chat),
+        disabled: direct && !available(chat), choice: { targetId: chat.id }, chat };
+    });
     if (other) {
       for (const entry of context.closed) {
-        add(entry.name, `${opens} · ${entry.remembered ? t('earlier chat') : t('new chat')}`, false, { provider: entry.provider });
+        destinations.push({ name: entry.name, detail: `${opens} · ${entry.remembered ? t('earlier chat') : t('new chat')}`,
+          choice: { provider: entry.provider } });
       }
+    }
+
+    if (handoff || reply.conversation) {
+      for (const { name, detail, disabled, choice } of destinations) {
+        const row = button('row');
+        row.setAttribute('role', 'menuitem');
+        row.disabled = pending || disabled;
+        row.append(label(name, detail));
+        row.addEventListener('click', () => {
+          closeLayer(menu);
+          run(menuAnchor, () => sendShare(reply, choice, page, { handoff, includeFiles, originals }));
+        });
+        menu.append(row);
+      }
+    } else {
+      const kind = reply.prompt ? 'prompt' : 'reply';
+      const target = el('select', 'share-destination');
+      target.setAttribute('aria-label', heading);
+      target.add(new Option(t('Choose a chat…'), ''));
+      let selected = '';
+      destinations.forEach(({ name, detail, disabled, chat }, index) => {
+        const option = new Option(`${name} · ${detail}`, String(index));
+        option.disabled = !!disabled;
+        target.add(option);
+        if (peer && chat?.id === peer.id && !option.disabled) selected = option.value;
+      });
+      target.value = selected;
+      const extras = instructionOptions(kind);
+      const actions = actionRows(kind, actionId => {
+        const { choice, chat } = destinations[Number(target.value)];
+        const options = { actionId, expectedMode: previous.shareMode, ...choice };
+        if (chat && chat.id === peer?.id) Object.assign(options, { peerId: peer.id, peerProvider: peer.provider, page });
+        const instructions = extras.read();
+        closeLayer(menu);
+        run(menuAnchor, async () => {
+          await refresh();
+          if (location.href !== page || previous.shareMode !== context.shareMode || previous.peer?.id !== context.peer?.id
+            || previous.peer?.provider !== context.peer?.provider || previous.side !== context.side) {
+            throw new Error(t('The chats or sharing settings changed. Open {menu} again.', { menu: t('Share') }));
+          }
+          if (chat && !context.chats.some(current => current.id === chat.id && current.provider === chat.provider)) {
+            throw new Error(t('That chat closed or changed. Open Share again.'));
+          }
+          return sendShare(reply, options, page, { includeFiles, instructions, originals });
+        });
+      }, () => target.value !== '');
+      target.addEventListener('change', actions.update);
+      menu.insertBefore(target, menu.children[1] || null);
+      menu.append(actions.node, extras.node);
+    }
+    if (!handoff && reply.conversation) {
+      const useContext = button('link share-context', t('Share as context…'));
+      useContext.addEventListener('click', () => {
+        if (location.href !== page) {
+          closeLayer(menu);
+          return toast(menuAnchor, t('The conversation changed. Open the action again.'), true);
+        }
+        renderShareMenu(reply, { handoff: true, includeFiles, originals });
+        place(menu, menuAnchor, menuAbove);
+      });
+      menu.append(useContext);
     }
     menu.append(el('p', 'hint', draft
       ? t('Added as a draft for you to review and send.')
-      : reply.conversation ? t('Sent right away as conversation context.')
+      : handoff || reply.conversation ? t('Sent right away as conversation context.')
       : reply.prompt ? t('Sent right away as your prompt.')
       : t('Sent right away with your share message.')));
   }
 
+  async function sendShare(reply, choice, page, { handoff = false, includeFiles = true, instructions, originals } = {}) {
+    const checkPage = () => {
+      if (location.href !== page) throw new Error(t('The conversation changed. Open the action again.'));
+    };
+    checkPage();
+    let files = [];
+    if (includeFiles && !reply.partial && reply.files?.length) {
+      const selected = originals?.size ? reply.files.map(file => originals.has(file)
+        ? { ...file, kind: 'local-prompt', pickedFile: originals.get(file) } : file) : reply.files;
+      files = await adapter.readReplyFiles(selected);
+    }
+    checkPage();
+    const kind = handoff ? 'handoff' : reply.conversation ? 'conversation' : reply.prompt ? 'prompt' : undefined;
+    const text = includeFiles ? reply.text : reply.textWithoutFiles ?? reply.text;
+    return request({ type: 'ASB_SHARE', ...choice, reply: text, ...(kind && { kind }), ...(files.length && { files }), ...instructions });
+  }
+
+  const quickSharePeer = () => context?.native && context.peer && available(context.peer) ? context.peer : null;
   function shareHost(response, prompt = false) {
     const view = host('share');
-    const trigger = button('share-button');
-    trigger.append(icon('share'), el('span', '', t('Share with…')));
+    const group = el('span', 'share-actions');
+    const primary = button('share-button share-primary');
+    const caption = el('span');
+    primary.append(icon('share'), caption);
+    const options = button('share-button share-options');
+    options.title = t('Choose a chat and action');
+    options.setAttribute('aria-label', options.title);
+    options.setAttribute('aria-haspopup', 'menu');
+    options.append(icon('chevron'));
     view.node.dataset.shareRole = prompt ? 'user' : 'assistant';
-    trigger.title = prompt ? t('Share this prompt with another chat') : t('Share this reply with another chat');
-    trigger.addEventListener('pointerdown', () => { dismissedBy = isOpen(menu) && menuAnchor === trigger ? trigger : null; });
-    trigger.addEventListener('click', async () => {
+
+    async function read(page) {
+      const reply = prompt ? { ...await adapter.readMessage(response), prompt: true }
+        : adapter.readReply ? await adapter.readReply(response) : adapter.replyText(response);
+      if (location.href !== page || !response.isConnected) throw new Error(t('The conversation changed. Open the action again.'));
+      return reply;
+    }
+    async function openOptions(trigger) {
+      try {
+        const page = location.href;
+        const reply = await read(page);
+        await toggleMenu(trigger, () => {
+          if (location.href !== page) throw new Error(t('The conversation changed. Open the action again.'));
+          renderShareMenu(reply);
+        }, false);
+      } catch (error) { toast(trigger, error.message, true); }
+    }
+    for (const trigger of [primary, options]) {
+      trigger.addEventListener('pointerdown', () => { dismissedBy = isOpen(menu) && menuAnchor === trigger ? trigger : null; });
+    }
+    options.addEventListener('click', () => { if (!pending) openOptions(options); });
+    primary.addEventListener('click', () => {
       if (pending) return;
-      let reply;
-      try { reply = await (prompt ? adapter.readMessage(response) : adapter.readReply ? adapter.readReply(response) : adapter.replyText(response)); } catch (error) { return toast(trigger, error.message, true); }
-      if (prompt) reply = { ...reply, prompt: true };
-      toggleMenu(trigger, () => renderShareMenu(reply), false);
+      const peer = quickSharePeer();
+      if (!peer) return openOptions(primary);
+      const page = location.href, previous = context;
+      closeLayer(menu);
+      run(primary, async () => {
+        const reply = await read(page);
+        await refresh();
+        if (!samePair(previous, page) || !quickSharePeer()) throw new Error(t('That chat closed or changed. Open Share again.'));
+        return sendShare(reply, {
+          targetId: peer.id, peerId: peer.id, peerProvider: peer.provider, expectedMode: previous.shareMode, page,
+        }, page);
+      });
     });
-    view.root.append(trigger);
+    group.append(primary, options);
+    view.root.append(group);
+    view.setBusy = busy => { primary.disabled = options.disabled = busy; };
+    let lastPeerName, lastMode, lastAction;
+    view.update = () => {
+      const peer = quickSharePeer();
+      const peerName = peer?.name || '';
+      const preferred = context.actions?.find(action => action.kind === (prompt ? 'prompt' : 'reply') && action.isDefault);
+      if (peerName === lastPeerName && context.shareMode === lastMode && preferred?.title === lastAction) return;
+      lastAction = preferred?.title;
+      lastPeerName = peerName;
+      lastMode = context.shareMode;
+      group.classList.toggle('paired', !!peer);
+      options.hidden = !peer;
+      if (peer) {
+        const draft = context.shareMode === 'draft', name = peer.name;
+        caption.textContent = draft ? t('Draft for {name}', { name }) : t('Share to {name}', { name });
+        primary.title = draft ? t('Add a draft to {name}', { name }) : t('Send to {name}', { name });
+        if (preferred) primary.title += ' · ' + t('Default action: {name}', { name: preferred.title });
+        primary.removeAttribute('aria-haspopup');
+      } else {
+        caption.textContent = t('Share with…');
+        primary.title = prompt ? t('Share this prompt with another chat') : t('Share this reply with another chat');
+        primary.setAttribute('aria-haspopup', 'menu');
+      }
+      view.setBusy(pending);
+    };
     return view;
   }
 
@@ -765,6 +1115,7 @@
       const views = prompt ? prompts : shares;
       let view = views.get(response);
       if (!view) views.set(response, view = shareHost(response, prompt));
+      view.update();
       seen.add(view);
       // Keep long native action rows usable in narrow split panes. The extension's
       // buttons can wrap on their own line directly beneath the answer text.
@@ -783,8 +1134,10 @@
     const latest = shares.get(replies.at(-1)?.response);
     const ready = latest && context.native && context.peer && !adapter.busy?.();
     quickReview.title = context.shareMode === 'draft'
-      ? t('Draft a critique request in both chats, or choose an answer to revise after both critiques are ready.')
-      : t('Send each answer to the other chat for critique, or choose an answer to revise after both critiques are ready.');
+      ? t('Draft the review request in both chats, or choose an answer to revise after both reviews are ready.')
+      : t('Send the review request to both chats, or choose an answer to revise after both reviews are ready.');
+    const preferred = context.actions?.find(action => action.kind === 'review' && action.isDefault);
+    if (preferred) quickReview.title += ' ' + t('Default action: {name}', { name: preferred.title });
     quickReview.setAttribute('aria-description', quickReview.title);
     for (const control of [compareButton, reviewGroup]) {
       if (ready) {
