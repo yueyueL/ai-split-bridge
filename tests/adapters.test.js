@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { JSDOM } from "jsdom";
 import { composeShare } from "../extension/settings.js";
+import { translations } from "./translations.js";
 
 const adapterSource = await readFile(new URL("../extension/adapters.js", import.meta.url), "utf8");
 const contentSource = await readFile(new URL("../extension/content.js", import.meta.url), "utf8");
@@ -40,6 +41,7 @@ function setup(provider = "chatgpt", options = {}) {
     editor.dispatchEvent(new window.InputEvent("input", { bubbles: true, inputType: "insertText", data: text }));
     return true;
   };
+  window.eval(translations);
   window.eval(adapterSource);
   return {
     dom, window, editor, adapter: window.AISplitAdapters,
@@ -1215,4 +1217,27 @@ test('an edited peer quotation is not eligible for automatic revision', async t 
   form.insertAdjacentHTML('beforebegin', writing.chatgpt.prompt.replace('Shared reply', 'Check this. Answer from Claude (right pane) Change this conclusion.'));
   form.insertAdjacentHTML('beforebegin', writing.chatgpt.reply);
   assert.equal(adapter.reviewResult(review).ready, false);
+});
+
+// ---------- Interface language ----------
+test("refusals from a chat page are written in Chinese when it is chosen", async t => {
+  const fixture = setup("claude");
+  t.after(fixture.close);
+  fixture.window.AISplitI18n.use("zh-CN");
+  assert.throws(() => fixture.adapter.preflight({ requestId: "empty", text: "  ", source: false }), { message: "请先输入一条文字提问。" });
+  fixture.setDraft("Keep my draft");
+  assert.throws(() => fixture.adapter.preflight({ requestId: "guarded", text: "A prompt", source: false }),
+    { message: "Claude 的输入框里已有草稿。请先发送或清除它；你的草稿已保留。" });
+  assert.throws(() => fixture.adapter.canLeave(), { message: "切换前请先发送或清除 Claude 的草稿。草稿已保留。" });
+  assert.equal(fixture.adapter.getDraft().text, "Keep my draft");
+});
+
+test("a shared conversation names its speakers in the chosen language", async t => {
+  const fixture = setup("chatgpt", { body: `<main>${replyLayouts.chatgpt(1)}</main><form>${fixtures.chatgpt.editor}</form>` });
+  t.after(fixture.close);
+  const elements = Array.from(fixture.adapter.messages(), entry => entry.element);
+  assert.ok((await fixture.adapter.readMessages(elements)).text.startsWith("You:\nQuestion 1?\n\n---\n\nChatGPT:\nAnswer 1 here."));
+  fixture.window.AISplitI18n.use("zh-CN");
+  assert.ok((await fixture.adapter.readMessages(elements)).text.startsWith("你：\nQuestion 1?\n\n---\n\nChatGPT：\nAnswer 1 here."));
+  await assert.rejects(fixture.adapter.readMessages([]), { message: "请至少选择一条要分享的消息。" });
 });

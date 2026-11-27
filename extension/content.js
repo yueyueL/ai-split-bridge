@@ -3,6 +3,8 @@
   const adapter = globalThis.AISplitAdapters;
   if (!adapter || globalThis.__aiSplitBridgeContentLoaded) return;
   globalThis.__aiSplitBridgeContentLoaded = true;
+  const i18n = globalThis.AISplitI18n;
+  const { t } = i18n;
 
   const handlers = {
     ASB_COMPARE_STATUS: () => adapter.compareStatus(),
@@ -27,7 +29,7 @@
     }
     if (!Object.hasOwn(handlers, message?.type)) return false;
     Promise.resolve().then(() => handlers[message.type](message)).then(respond, error => respond({
-      ok: false, error: error.message || 'This chat could not complete the action.', retry: !!error.retry,
+      ok: false, error: error.message || t('This chat could not complete the action.'), retry: !!error.retry,
     }));
     return true;
   });
@@ -215,8 +217,6 @@
     if (clear && style.color && readable && style.color !== 'transparent' && (alpha === undefined || alpha > .25)) root.style.setProperty('--ink', style.color);
     else root.style.removeProperty('--ink');
   }
-  const list = names => names.length < 3 ? names.join(' and ') : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
-  const capital = side => side[0].toUpperCase() + side.slice(1);
 
   // Menus and notices live in the top layer so composer containers with clipping cannot hide them.
   const layer = host('layer');
@@ -262,18 +262,18 @@
   const isChosen = chat => available(chat) && (chosen.get(choiceKey(chat)) ?? !!chat.side);
   const targets = () => (context?.chats || []).filter(isChosen);
   function sendLabel(count) {
-    if (!count) return 'Send to…';
-    if (count === 1) return 'Send both';
-    return count === context.chats.filter(available).length ? 'Send all' : `Send to ${count + 1}`;
+    if (!count) return t('Send to…');
+    if (count === 1) return t('Send both');
+    return count === context.chats.filter(available).length ? t('Send all') : t('Send to {count}', { count: count + 1 });
   }
 
   async function request(message) {
     let result;
     try { result = await chrome.runtime.sendMessage(message); }
     catch (error) {
-      throw new Error(/context invalidated/i.test(error.message) ? 'The extension was updated. Refresh this page to reconnect.' : 'Could not reach the extension. Refresh this page and try again.');
+      throw new Error(/context invalidated/i.test(error.message) ? t('The extension was updated. Refresh this page to reconnect.') : t('Could not reach the extension. Refresh this page and try again.'));
     }
-    if (!result?.ok) throw new Error(result?.error || 'This action could not be completed.');
+    if (!result?.ok) throw new Error(result?.error || t('This action could not be completed.'));
     return result;
   }
   async function refresh() {
@@ -321,7 +321,6 @@
   sendButton.append(icon('both'), sendText);
   const moreButton = button('more');
   moreButton.append(icon('chevron'));
-  moreButton.setAttribute('aria-label', 'Choose chats and conversation actions');
   moreButton.setAttribute('aria-haspopup', 'menu');
   pill.append(sendButton, moreButton);
   composer.root.append(pill);
@@ -336,8 +335,10 @@
     if (!shown) return;
     paint(composer.root, look);
     const picked = targets();
-    sendText.textContent = pending ? 'Working…' : sendLabel(picked.length);
-    sendButton.title = picked.length ? `Send here and to ${list(picked.map(chat => chat.name))} (${SHORTCUT})` : 'Choose the chats to send to';
+    sendText.textContent = pending ? t('Working…') : sendLabel(picked.length);
+    sendButton.title = picked.length
+      ? t('Send here and to {names} ({shortcut})', { names: i18n.list(picked.map(chat => chat.name)), shortcut: SHORTCUT })
+      : t('Choose the chats to send to');
     sendButton.disabled = moreButton.disabled = pending;
   }
 
@@ -352,7 +353,7 @@
     const node = button('show');
     const side = context.peer.side;
     node.append(icon(side));
-    node.title = `Show ${name} on the ${side}`;
+    node.title = side === 'left' ? t('Show {name} on the left', { name }) : t('Show {name} on the right', { name });
     node.setAttribute('aria-label', node.title);
     node.disabled = pending;
     node.addEventListener('click', () => {
@@ -364,11 +365,13 @@
 
   const titled = (spot, chat) => chat.title && chat.title !== chat.name ? `${spot} · ${chat.title}` : spot;
   function where(chat) {
-    return titled(chat.side ? `${capital(chat.side)} side` : chat.asleep ? 'Asleep · open its tab first' : chat.loading ? 'Loading…' : 'Other tab', chat);
+    const spot = chat.side === 'left' ? t('Left side') : chat.side ? t('Right side')
+      : chat.asleep ? t('Asleep · open its tab first') : chat.loading ? t('Loading…') : t('Other tab');
+    return titled(spot, chat);
   }
 
   function renderSendMenu() {
-    menu.replaceChildren(el('p', 'heading', 'Send this prompt to'));
+    menu.replaceChildren(el('p', 'heading', t('Send this prompt to')));
     for (const chat of context.chats) {
       const item = el('div', 'item');
       const row = button('row');
@@ -392,20 +395,20 @@
       for (const entry of context.closed) {
         const item = el('div', 'item');
         const row = el('div', 'row');
-        row.append(label(entry.name, entry.remembered ? 'Earlier chat' : 'Not open'));
+        row.append(label(entry.name, entry.remembered ? t('Earlier chat') : t('Not open')));
         item.append(row, showButton({ provider: entry.provider }, entry.name));
         menu.append(item);
       }
     }
     const footer = el('div', 'footer');
     const count = targets().length;
-    const go = button('primary', count ? sendLabel(count) : 'Choose a chat');
+    const go = button('primary', count ? sendLabel(count) : t('Choose a chat'));
     go.disabled = pending || !count;
     go.addEventListener('click', sendNow);
     footer.append(go);
     // Gemini can expose action bars for older turns before the newest one has any controls.
     if (!shares.size || adapter.provider === 'gemini') {
-      const latest = button('link', 'Share this chat’s latest reply…');
+      const latest = button('link', t('Share this chat’s latest reply…'));
       latest.addEventListener('click', async () => {
         let reply;
         try { reply = await (adapter.readResponse ? adapter.readResponse() : adapter.getResponse()); } catch (error) { closeLayer(menu); return toast(pill, error.message, true); }
@@ -415,20 +418,20 @@
       footer.append(latest);
     }
     if (adapter.messages && adapter.readMessages) {
-      const select = button('link select-messages', 'Select messages…');
+      const select = button('link select-messages', t('Select messages…'));
       select.disabled = pending;
       select.addEventListener('click', () => {
         try { renderMessagePicker(); } catch (error) { closeLayer(menu); toast(pill, error.message, true); }
       });
       footer.append(select);
     }
-    for (const [action, title] of [['compare', 'Compare latest answers…'], ['cross-review', 'Cross-review…']]) {
+    for (const [action, title] of [['compare', t('Compare latest answers…')], ['cross-review', t('Cross-review…')]]) {
       const link = button(`link ${action}`, title);
       link.disabled = pending;
       link.addEventListener('click', () => renderPairMenu(action));
       footer.append(link);
     }
-    footer.append(el('p', 'hint', `${SHORTCUT} sends to the checked chats`));
+    footer.append(el('p', 'hint', t('{shortcut} sends to the checked chats', { shortcut: SHORTCUT })));
     menu.append(footer);
   }
 
@@ -462,10 +465,8 @@
       context.peer.id === previous.peer.id && context.peer.provider === previous.peer.provider &&
       context.side === previous.side && context.shareMode === previous.shareMode;
   }
-  function pairButton(action, name, title, quick = false) {
-    const trigger = button(`share-button ${action}`, name);
-    trigger.title = title;
-    trigger.setAttribute('aria-label', title);
+  function pairButton(action, quick = false) {
+    const trigger = button(`share-button ${action}`);
     trigger.setAttribute('aria-haspopup', 'menu');
     trigger.addEventListener('pointerdown', () => {
       dismissedBy = isOpen(menu) && menuAnchor === trigger ? trigger : null;
@@ -477,38 +478,54 @@
     });
     return trigger;
   }
-  const compareButton = pairButton('compare', 'Compare', 'Compare the latest answers from both sides');
-  const quickReview = pairButton('cross-review', 'Cross-review', 'Cross-review both answers', true);
-  const reviewOptions = pairButton('cross-review', '', 'Choose a cross-review action or revise an answer');
+  const compareButton = pairButton('compare');
+  const quickReview = pairButton('cross-review', true);
+  const reviewOptions = pairButton('cross-review');
   reviewOptions.className = 'share-button review-options';
   reviewOptions.append(icon('chevron'));
   const reviewGroup = el('span', 'review-actions');
   reviewGroup.append(quickReview, reviewOptions);
+  // These controls are built once, so their words are set here and again when the language changes.
+  function labelControls() {
+    moreButton.setAttribute('aria-label', t('Choose chats and conversation actions'));
+    compareButton.textContent = t('Compare');
+    quickReview.textContent = t('Cross-review');
+    for (const [trigger, title] of [
+      [compareButton, t('Compare the latest answers from both sides')],
+      [quickReview, t('Cross-review both answers')],
+      [reviewOptions, t('Choose a cross-review action or revise an answer')],
+    ]) {
+      trigger.title = title;
+      trigger.setAttribute('aria-label', title);
+    }
+  }
+  labelControls();
 
   async function renderPairMenu(action, mode = 'choose') {
     const crossReview = action === 'cross-review';
-    const name = crossReview ? 'Cross-review' : 'Compare';
+    const name = crossReview ? t('Cross-review') : t('Compare');
     const previous = { ...context };
     const { selfId, side, peer, shareMode } = previous;
     const page = location.href;
-    const heading = el('p', 'heading', `${name} latest answers`);
+    const heading = el('p', 'heading', crossReview ? t('Cross-review latest answers') : t('Compare latest answers'));
     const note = el('p', 'hint');
     note.setAttribute('role', 'status');
     menu.replaceChildren(heading, note);
     if (!context.native || !peer) {
-      note.textContent = `Open two AI chats in Chrome Split View to ${name.toLowerCase()} their answers.`;
+      note.textContent = crossReview ? t('Open two AI chats in Chrome Split View to cross-review their answers.')
+        : t('Open two AI chats in Chrome Split View to compare their answers.');
       place(menu, menuAnchor, menuAbove);
       return;
     }
-    note.textContent = 'Checking both chats for completed answers…';
+    note.textContent = t('Checking both chats for completed answers…');
     place(menu, menuAnchor, menuAbove);
     let status;
     try { status = await request({ type: crossReview ? 'ASB_REVIEW_STATUS' : 'ASB_COMPARE_STATUS', peerId: peer.id }); }
     catch (error) { status = { ready: false, message: error.message }; }
     if (!note.isConnected || !isOpen(menu)) return;
     if (!status.ready) {
-      note.textContent = status.message || 'Wait for a completed answer on each side.';
-      const retry = button('link', 'Check again');
+      note.textContent = status.message || t('Wait for a completed answer on each side.');
+      const retry = button('link', t('Check again'));
       retry.addEventListener('click', () => renderPairMenu(action));
       menu.append(retry);
       place(menu, menuAnchor, menuAbove);
@@ -519,7 +536,7 @@
       closeLayer(menu);
       return run(menuAnchor, async () => {
         await refresh();
-        if (!samePair(previous, page)) throw new Error(`The chats or sharing settings changed. Open ${name} again.`);
+        if (!samePair(previous, page)) throw new Error(t('The chats or sharing settings changed. Open {menu} again.', { menu: name }));
         return request({ peerId: peer.id, peerProvider: peer.provider, expectedMode: shareMode, ...message });
       });
     }
@@ -535,20 +552,20 @@
       return submit({ type: 'ASB_CROSS_REVIEW', action: 'critique', turns: status.turns });
     }
     if (crossReview && (!revision || mode === 'again')) {
-      heading.textContent = 'How should the assistants review each other?';
+      heading.textContent = t('How should the assistants review each other?');
       for (const [action, title, detail] of [
-        ['critique', 'Critique', 'Assess the reasoning and evidence.'],
-        ['errors', 'Find errors', 'Look for mistakes and unsupported claims.'],
-        ['improvements', 'Suggest improvements', 'Recommend specific changes.'],
+        ['critique', t('Critique'), t('Assess the reasoning and evidence.')],
+        ['errors', t('Find errors'), t('Look for mistakes and unsupported claims.')],
+        ['improvements', t('Suggest improvements'), t('Recommend specific changes.')],
       ]) {
         addChoice(title, detail, { type: 'ASB_CROSS_REVIEW', action, turns: status.turns });
       }
       note.textContent = shareMode === 'draft'
-        ? 'Adds a review draft to each chat. Send both drafts to see the critiques side by side.'
-        : 'Sends each answer to the other chat. You can read both critiques side by side.';
+        ? t('Adds a review draft to each chat. Send both drafts to see the critiques side by side.')
+        : t('Sends each answer to the other chat. You can read both critiques side by side.');
     } else {
       const self = { id: selfId, side, name: adapter.name };
-      heading.textContent = revision ? 'Revise an answer' : 'Who should compare the two latest answers?';
+      heading.textContent = revision ? t('Revise an answer') : t('Who should compare the two latest answers?');
       for (const chat of (side === 'left' ? [self, peer] : [peer, self])) {
         const message = revision ? { type: 'ASB_REVISE', reviewId: revision.reviewId, turns: revision.turns }
           : { type: 'ASB_COMPARE', turns: status.turns };
@@ -556,15 +573,15 @@
       }
       if (revision) {
         note.textContent = shareMode === 'draft'
-          ? 'Both critiques are ready. Choose a chat to draft a revision request using the other assistant’s critique.'
-          : 'Both critiques are ready. Choose a chat to revise its original answer using the other assistant’s critique.';
-        const again = button('link', 'Cross-review the latest replies again…');
+          ? t('Both critiques are ready. Choose a chat to draft a revision request using the other assistant’s critique.')
+          : t('Both critiques are ready. Choose a chat to revise its original answer using the other assistant’s critique.');
+        const again = button('link', t('Cross-review the latest replies again…'));
         again.addEventListener('click', () => renderPairMenu(action, 'again'));
         menu.append(again);
       } else {
         note.textContent = shareMode === 'draft'
-          ? 'Choosing a reviewer adds an editable comparison prompt to that chat.'
-          : 'Choosing a reviewer sends both answers to that chat for comparison.';
+          ? t('Choosing a reviewer adds an editable comparison prompt to that chat.')
+          : t('Choosing a reviewer sends both answers to that chat for comparison.');
       }
     }
     place(menu, menuAnchor, menuAbove);
@@ -578,34 +595,34 @@
     const messages = adapter.messages();
     const page = location.href;
     const picked = new Set();
-    menu.replaceChildren(el('p', 'heading', 'Select messages to share'));
+    menu.replaceChildren(el('p', 'heading', t('Select messages to share')));
     const choices = el('div', 'message-list');
     choices.setAttribute('role', 'group');
-    choices.setAttribute('aria-label', 'Conversation messages');
+    choices.setAttribute('aria-label', t('Conversation messages'));
     const controls = el('div', 'selection-actions');
-    const all = button('link', 'Select all');
-    const clear = button('link', 'Clear');
+    const all = button('link', t('Select all'));
+    const clear = button('link', t('Clear'));
     controls.append(all, clear);
     const footer = el('div', 'footer');
-    const next = button('primary', 'Choose messages');
+    const next = button('primary', t('Choose messages'));
     next.disabled = true;
-    const back = button('link', 'Back');
+    const back = button('link', t('Back'));
     back.addEventListener('click', () => { renderSendMenu(); place(menu, menuAnchor, menuAbove); });
     const update = () => {
       next.disabled = pending || !picked.size;
-      next.textContent = picked.size ? `Share ${picked.size} message${picked.size === 1 ? '' : 's'}…` : 'Choose messages';
+      next.textContent = !picked.size ? t('Choose messages') : picked.size === 1 ? t('Share 1 message…') : t('Share {count} messages…', { count: picked.size });
     };
     const checks = messages.map((message, index) => {
       const row = el('label', 'message-choice');
       const checkbox = el('input');
       checkbox.type = 'checkbox';
-      const who = message.role === 'user' ? 'You' : adapter.name;
-      checkbox.setAttribute('aria-label', `${index + 1}. ${who}: ${message.text || 'Files'}`);
+      const who = message.role === 'user' ? t('You') : adapter.name;
+      checkbox.setAttribute('aria-label', `${index + 1}. ${who}: ${message.text || t('Files')}`);
       checkbox.addEventListener('change', () => {
         if (checkbox.checked) picked.add(message.element); else picked.delete(message.element);
         update();
       });
-      row.append(checkbox, label(who, message.text || 'Files'));
+      row.append(checkbox, label(who, message.text || t('Files')));
       choices.append(row);
       return checkbox;
     });
@@ -618,12 +635,13 @@
       renderComposer();
       checks.forEach(checkbox => { checkbox.disabled = true; });
       all.disabled = clear.disabled = next.disabled = back.disabled = true;
-      next.textContent = 'Preparing…';
+      next.textContent = t('Preparing…');
       let reply;
       try {
-        if (location.href !== page) throw new Error('This conversation changed. Open Select messages again.');
+        const changed = () => new Error(t('This conversation changed. Open Select messages again.'));
+        if (location.href !== page) throw changed();
         reply = await adapter.readMessages(messages.filter(message => picked.has(message.element)).map(message => message.element));
-        if (location.href !== page) throw new Error('This conversation changed. Open Select messages again.');
+        if (location.href !== page) throw changed();
       } catch (error) {
         reply = null;
         closeLayer(menu);
@@ -636,16 +654,20 @@
     });
     footer.append(next, back);
     menu.append(controls, choices, el('p', 'hint', messages.length
-      ? 'Only messages currently loaded in this chat are listed. They keep their original order.'
-      : 'No messages are loaded in this chat yet.'), footer);
+      ? t('Only messages currently loaded in this chat are listed. They keep their original order.')
+      : t('No messages are loaded in this chat yet.')), footer);
     place(menu, menuAnchor, menuAbove);
   }
 
   function renderShareMenu(reply) {
     const other = context.peer?.side;
     const draft = context.shareMode === 'draft';
-    const what = reply.conversation ? 'the selected messages' : reply.prompt ? 'this prompt' : reply.partial ? 'the selected text' : 'this reply';
-    menu.replaceChildren(el('p', 'heading', draft ? `Share ${what} with` : `Send ${what} to`));
+    const heading = draft
+      ? (reply.conversation ? t('Share the selected messages with') : reply.prompt ? t('Share this prompt with')
+        : reply.partial ? t('Share the selected text with') : t('Share this reply with'))
+      : (reply.conversation ? t('Send the selected messages to') : reply.prompt ? t('Send this prompt to')
+        : reply.partial ? t('Send the selected text to') : t('Send this reply to'));
+    menu.replaceChildren(el('p', 'heading', heading));
     let includeFiles = true;
     if (reply.files?.length && !reply.partial) {
       const option = el('label', 'file-option');
@@ -653,7 +675,11 @@
       checkbox.type = 'checkbox';
       checkbox.checked = true;
       checkbox.addEventListener('change', () => { includeFiles = checkbox.checked; });
-      option.append(checkbox, document.createTextNode(` Include ${reply.files.length} ${reply.prompt || reply.conversation ? '' : 'generated '}file${reply.files.length === 1 ? '' : 's'}`));
+      const count = reply.files.length;
+      const include = reply.prompt || reply.conversation
+        ? (count === 1 ? t('Include 1 file') : t('Include {count} files', { count }))
+        : (count === 1 ? t('Include 1 generated file') : t('Include {count} generated files', { count }));
+      option.append(checkbox, document.createTextNode(` ${include}`));
       menu.append(option, el('p', 'file-names', reply.files.map(file => file.name).join(', ')));
     }
     const add = (name, detail, disabled, choice) => {
@@ -671,28 +697,29 @@
       });
       menu.append(row);
     };
+    const opens = other === 'left' ? t('Opens on the left') : t('Opens on the right');
     for (const chat of context.chats) {
       const direct = !!chat.side || !other;
-      add(chat.name, direct ? where(chat) : titled(`Opens on the ${other}`, chat), direct && !available(chat), { targetId: chat.id });
+      add(chat.name, direct ? where(chat) : titled(opens, chat), direct && !available(chat), { targetId: chat.id });
     }
     if (other) {
       for (const entry of context.closed) {
-        add(entry.name, `Opens on the ${other} · ${entry.remembered ? 'earlier chat' : 'new chat'}`, false, { provider: entry.provider });
+        add(entry.name, `${opens} · ${entry.remembered ? t('earlier chat') : t('new chat')}`, false, { provider: entry.provider });
       }
     }
     menu.append(el('p', 'hint', draft
-      ? 'Added as a draft for you to review and send.'
-      : reply.conversation ? 'Sent right away as conversation context.'
-      : reply.prompt ? 'Sent right away as your prompt.'
-      : 'Sent right away with your share message.'));
+      ? t('Added as a draft for you to review and send.')
+      : reply.conversation ? t('Sent right away as conversation context.')
+      : reply.prompt ? t('Sent right away as your prompt.')
+      : t('Sent right away with your share message.')));
   }
 
   function shareHost(response, prompt = false) {
     const view = host('share');
     const trigger = button('share-button');
-    trigger.append(icon('share'), el('span', '', 'Share with…'));
+    trigger.append(icon('share'), el('span', '', t('Share with…')));
     view.node.dataset.shareRole = prompt ? 'user' : 'assistant';
-    trigger.title = prompt ? 'Share this prompt with another chat' : 'Share this reply with another chat';
+    trigger.title = prompt ? t('Share this prompt with another chat') : t('Share this reply with another chat');
     trigger.addEventListener('pointerdown', () => { dismissedBy = isOpen(menu) && menuAnchor === trigger ? trigger : null; });
     trigger.addEventListener('click', async () => {
       if (pending) return;
@@ -756,8 +783,8 @@
     const latest = shares.get(replies.at(-1)?.response);
     const ready = latest && context.native && context.peer && !adapter.busy?.();
     quickReview.title = context.shareMode === 'draft'
-      ? 'Draft a critique request in both chats, or choose an answer to revise after both critiques are ready.'
-      : 'Send each answer to the other chat for critique, or choose an answer to revise after both critiques are ready.';
+      ? t('Draft a critique request in both chats, or choose an answer to revise after both critiques are ready.')
+      : t('Send each answer to the other chat for critique, or choose an answer to revise after both critiques are ready.');
     quickReview.setAttribute('aria-description', quickReview.title);
     for (const control of [compareButton, reviewGroup]) {
       if (ready) {
@@ -790,5 +817,15 @@
     }
   });
 
+  // Share controls keep the words they were built with, so they are built again in the new language.
+  i18n.follow(chrome, () => {
+    closeLayer(menu);
+    labelControls();
+    for (const views of [shares, prompts]) {
+      for (const view of views.values()) view.node.remove();
+      views.clear();
+    }
+    scan();
+  });
   refresh().catch(() => {});
 })();

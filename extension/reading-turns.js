@@ -1,6 +1,8 @@
 (() => {
   'use strict';
   if (globalThis.AISplitReadingTurns) return;
+  const i18n = globalThis.AISplitI18n;
+  const { t } = i18n;
 
   const nativeIds = ['data-message-id', 'data-chatgpt-selection-message-id', 'data-turn-key', 'data-turn-id', 'data-response-id'];
   const idSelector = nativeIds.map(name => `[${name}]`).join(',');
@@ -222,7 +224,7 @@
       const record = { key: `${base}/${ordinal}`, label, role };
       if (role === 'user') promptKey = record.key;
       const collapsed = hidden.has(record.key), marked = bookmarks.has(record.key);
-      const noun = role === 'user' ? 'prompt' : 'reply';
+      const prompt = role === 'user', language = i18n.language;
       const chatgptReply = role === 'assistant' && adapter.provider === 'chatgpt';
       view.host.toggleAttribute('data-chatgpt-reply', chatgptReply);
       const wrapper = wrappers.get(element);
@@ -234,17 +236,17 @@
       view.boundary = boundary;
       view.record = record;
       current.set(record.key, view);
-      if (view.collapsed !== collapsed || view.role !== role) {
-        const title = `${collapsed ? 'Show' : 'Hide'} ${noun}`;
+      if (view.collapsed !== collapsed || view.role !== role || view.language !== language) {
+        const title = collapsed ? (prompt ? t('Show prompt') : t('Show reply')) : (prompt ? t('Hide prompt') : t('Hide reply'));
         view.fold.replaceChildren(icon(collapsed ? 'unfold' : 'fold'));
-        if (collapsed || chatgptReply) view.fold.append(document.createTextNode(collapsed ? title : 'Hide'));
+        if (collapsed || chatgptReply) view.fold.append(document.createTextNode(collapsed ? title : t('Hide')));
         view.fold.title = title;
         view.fold.setAttribute('aria-label', title);
         view.fold.setAttribute('aria-expanded', String(!collapsed));
         view.host.toggleAttribute('data-folded', collapsed);
       }
-      if (view.marked !== marked || view.role !== role) {
-        const title = marked ? 'Remove bookmark' : `Bookmark ${noun}`;
+      if (view.marked !== marked || view.role !== role || view.language !== language) {
+        const title = marked ? t('Remove bookmark') : prompt ? t('Bookmark prompt') : t('Bookmark reply');
         view.mark.title = title;
         view.mark.setAttribute('aria-label', title);
         view.mark.setAttribute('aria-pressed', String(marked));
@@ -263,7 +265,7 @@
         if (view.host.parentElement !== view.row) view.row.append(view.host);
       }
       boundary.toggleAttribute('data-asb-reading-collapsed', collapsed);
-      Object.assign(view, { collapsed, marked, role });
+      Object.assign(view, { collapsed, marked, role, language });
       if (marked) remember(view);
     }
     const records = Array.from(current.values(), view => view.record);

@@ -1,5 +1,7 @@
 import { providerFor } from './providers.js';
 
+const i18n = globalThis.AISplitI18n;
+const { t } = i18n;
 const wide = document.getElementById('readingWide');
 const tools = document.getElementById('readingTools');
 const index = document.getElementById('reading-index');
@@ -15,7 +17,7 @@ async function refreshBookmarks() {
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (version !== revision) return;
-    if (!providerFor(tab?.url)) { detail.textContent = 'Open an AI chat to see its bookmarks.'; return; }
+    if (!providerFor(tab?.url)) { detail.textContent = t('Open an AI chat to see its bookmarks.'); return; }
     const request = values => chrome.tabs.sendMessage(tab.id, values, { frameId: 0 });
     const result = await request({ type: 'ASB_READING_LIST' });
     if (version !== revision) return;
@@ -23,14 +25,14 @@ async function refreshBookmarks() {
     for (const record of result.items) {
       const button = document.createElement('button');
       button.type = 'button';
-      button.textContent = `${record.role === 'user' ? 'You' : 'Reply'} · ${record.label}`;
+      button.textContent = `${record.role === 'user' ? t('You') : t('Reply')} · ${record.label}`;
       button.title = button.textContent;
       button.addEventListener('click', async () => {
         for (const row of items.children) row.disabled = true;
-        detail.textContent = 'Finding message…';
+        detail.textContent = t('Finding message…');
         try {
           const jump = await request({ type: 'ASB_READING_JUMP', page: result.page, key: record.key });
-          if (!jump?.ok) throw new Error(jump?.error || 'Reopen the popup and try again.');
+          if (!jump?.ok) throw new Error(jump?.error || t('Reopen the popup and try again.'));
           window.close();
         } catch (error) {
           detail.textContent = error.message;
@@ -39,9 +41,9 @@ async function refreshBookmarks() {
       });
       items.append(button);
     }
-    if (!result.total) detail.textContent = 'Use the bookmark icon beside a message to find it here.';
-    else if (result.total > result.items.length) detail.textContent = 'Scroll through the chat to load earlier bookmarks, then reopen this list.';
-  } catch { if (version === revision) detail.textContent = 'Refresh this AI tab and reopen the popup to see its bookmarks.'; }
+    if (!result.total) detail.textContent = t('Use the bookmark icon beside a message to find it here.');
+    else if (result.total > result.items.length) detail.textContent = t('Scroll through the chat to load earlier bookmarks, then reopen this list.');
+  } catch { if (version === revision) detail.textContent = t('Refresh this AI tab and reopen the popup to see its bookmarks.'); }
 }
 for (const input of [wide, tools]) {
   input.addEventListener('change', async () => {
@@ -52,7 +54,7 @@ for (const input of [wide, tools]) {
       if (input === tools) await refreshBookmarks();
     } catch {
       input.checked = !input.checked;
-      document.getElementById('reading-error').textContent = 'Could not save this reading preference.';
+      document.getElementById('reading-error').textContent = t('Could not save this reading preference.');
     } finally { input.disabled = false; }
   });
 }
@@ -61,4 +63,5 @@ chrome.storage.local.get(['readingWide', 'readingTools']).then(options => {
   tools.checked = options.readingTools === true;
   wide.disabled = tools.disabled = false;
   refreshBookmarks();
-}).catch(() => { document.getElementById('reading-error').textContent = 'Could not load reading preferences.'; });
+}).catch(() => { document.getElementById('reading-error').textContent = t('Could not load reading preferences.'); });
+i18n.onChange(() => { if (!tools.disabled) refreshBookmarks(); });

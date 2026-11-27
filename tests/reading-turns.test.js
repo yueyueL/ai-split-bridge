@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { JSDOM } from 'jsdom';
+import { translations } from './translations.js';
 
 const scripts = await Promise.all(['adapters.js', 'reading-turns.js'].map(name => readFile(new URL(`../extension/${name}`, import.meta.url), 'utf8')));
 const fixtures = {
@@ -21,6 +22,7 @@ function setup(t, hostname, markup) {
   window.HTMLElement.prototype.getClientRects = () => [{ height: 20, width: 300 }];
   let scrolled;
   window.HTMLElement.prototype.scrollIntoView = function (options) { scrolled = { node: this, block: options.block }; };
+  window.eval(translations);
   for (const script of scripts) window.eval(script);
   const api = window.AISplitReadingTurns, adapter = window.AISplitAdapters;
   const hidden = new Set(), bookmarks = new Set();

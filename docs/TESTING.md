@@ -14,6 +14,15 @@ Run `npm run preview` and open `http://127.0.0.1:4173`.
 
 The fixture substitutes host detection and mocks extension messaging. It does not test Split View, tab switching, or any site’s real editor framework, and it never contacts an AI service. Stop the server with Ctrl+C.
 
+## Language
+
+1. Open the popup and set **Language → Interface language** to **简体中文**. The popup should change at once, including the message shown under **Sharing** if you have not customized it. A message you wrote yourself must stay as written.
+2. Without refreshing, look at an open AI chat. **Send both**, **Share with…**, **Compare** and **Cross-review** should now read 同时发送, 分享到…, 对比 and 互评, and their menus, hints and notices should be in Chinese.
+3. Share a reply and run a Cross-review. The text placed in the other chat should use the Chinese default messages and pane labels.
+4. Switch back to **English**, then to **Automatic (browser language)**, and confirm each takes effect without reloading. Reopen the popup to confirm the choice was saved.
+
+In the local fixture, choose the language in **Popup** first; the provider pages opened in the same tab then use it.
+
 ## Controls appear in the right places
 
 1. Open two AI chats in a native split (right-click a tab → Split View). On each side, confirm **Send both** sits just left of the site’s own Send or mic button. Confirm it looks like part of the composer: about the same height and corner shape as the site’s own buttons, in the site’s colours (for example Claude’s orange or Gemini’s blue for the menu’s Send button).

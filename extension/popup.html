@@ -9,20 +9,20 @@
 <body>
   <header>
     <img class="mark" src="icons/mark-64.png" alt="" width="32" height="32">
-    <div><h1>AI Split Bridge</h1><p id="capability">Checking Chrome’s Split View support…</p></div>
+    <div><h1>AI Split Bridge</h1><p id="capability" data-i18n>Checking Chrome’s Split View support…</p></div>
   </header>
 
   <section id="pair-section" hidden>
-    <h2>Split View</h2>
+    <h2 data-i18n>Split View</h2>
     <form id="pair-form" class="card">
-      <div class="row"><label for="left">Left</label><select id="left" required></select></div>
-      <div class="row"><label for="right">Right</label><select id="right" required></select></div>
-      <div class="row end"><button id="pair" class="primary" type="submit">Create split</button></div>
+      <div class="row"><label for="left" data-i18n>Left</label><select id="left" required></select></div>
+      <div class="row"><label for="right" data-i18n>Right</label><select id="right" required></select></div>
+      <div class="row end"><button id="pair" class="primary" type="submit" data-i18n>Create split</button></div>
     </form>
   </section>
 
   <section>
-    <h2>Open an assistant</h2>
+    <h2 data-i18n>Open an assistant</h2>
     <div class="providers">
       <button type="button" class="chip" data-provider="chatgpt">ChatGPT</button>
       <button type="button" class="chip" data-provider="claude">Claude</button>
@@ -33,18 +33,18 @@
   </section>
 
   <section>
-    <h2>Reading</h2>
+    <h2 data-i18n>Reading</h2>
     <div class="card">
       <div class="row">
-        <label for="readingWide" class="grow"><span class="title">Wider messages</span><span class="detail">Use more of each chat pane for reading.</span></label>
+        <label for="readingWide" class="grow"><span class="title" data-i18n>Wider messages</span><span class="detail" data-i18n>Use more of each chat pane for reading.</span></label>
         <input id="readingWide" type="checkbox" role="switch" class="switch" disabled>
       </div>
       <div class="row">
-        <label for="readingTools" class="grow"><span class="title">Message tools</span><span class="detail">Collapse or bookmark individual prompts and replies.</span></label>
+        <label for="readingTools" class="grow"><span class="title" data-i18n>Message tools</span><span class="detail" data-i18n>Collapse or bookmark individual prompts and replies.</span></label>
         <input id="readingTools" type="checkbox" role="switch" class="switch" disabled>
       </div>
       <div id="reading-index" class="field" hidden>
-        <span class="title">Bookmarks in this chat</span>
+        <span class="title" data-i18n>Bookmarks in this chat</span>
         <div id="reading-items"></div>
         <p class="detail" id="reading-detail" role="status"></p>
       </div>
@@ -53,42 +53,58 @@
   </section>
 
   <section>
-    <h2>Sharing</h2>
+    <h2 data-i18n>Sharing</h2>
     <form id="share-settings" class="card">
       <div class="row">
-        <label for="send-now" class="grow"><span class="title">Send right away</span><span id="mode-detail" class="detail">Send shared messages, comparisons and cross-reviews immediately.</span></label>
+        <label for="send-now" class="grow"><span class="title" data-i18n>Send right away</span><span id="mode-detail" class="detail" data-i18n>Send shared messages, comparisons and cross-reviews immediately.</span></label>
         <input id="send-now" type="checkbox" role="switch" class="switch" disabled>
       </div>
       <div class="row template-choice">
-        <label for="share-kind">Message for</label>
+        <label for="share-kind" data-i18n>Message for</label>
         <select id="share-kind" disabled>
-          <option value="reply">Replies</option>
-          <option value="prompt">My prompts</option>
-          <option value="conversation">Selected messages</option>
-          <option value="comparison">Compare</option>
-          <optgroup label="Cross-review">
-            <option value="reviewCommon">All review modes</option>
-            <option value="critique">Critique</option>
-            <option value="errors">Find errors</option>
-            <option value="improvements">Suggest improvements</option>
+          <option value="reply" data-i18n>Replies</option>
+          <option value="prompt" data-i18n>My prompts</option>
+          <option value="conversation" data-i18n>Selected messages</option>
+          <option value="comparison" data-i18n>Compare</option>
+          <optgroup label="Cross-review" data-i18n-label>
+            <option value="reviewCommon" data-i18n>All review modes</option>
+            <option value="critique" data-i18n>Critique</option>
+            <option value="errors" data-i18n>Find errors</option>
+            <option value="improvements" data-i18n>Suggest improvements</option>
           </optgroup>
         </select>
       </div>
       <div class="field">
-        <div class="field-head"><label id="message-label" for="share-message" class="title">Message with the shared reply</label><span id="count" class="detail" aria-live="off"></span></div>
+        <div class="field-head"><label id="message-label" for="share-message" class="title" data-i18n>Message with the shared reply</label><span id="count" class="detail" aria-live="off"></span></div>
         <textarea id="share-message" rows="6" maxlength="4000" spellcheck="true" disabled></textarea>
         <div class="field-foot">
-          <span id="template-hint" class="detail">Insert</span>
-          <button type="button" id="assistant-placeholder" class="tag" data-insert="{assistant}" title="The assistant’s name, such as ChatGPT" disabled>{assistant}</button>
-          <button type="button" id="content-placeholder" class="tag" data-insert="{reply}" title="The shared text. Without it, the text goes at the end" disabled>{reply}</button>
-          <button type="button" id="reset-message" class="text-button" disabled>Reset</button>
+          <span id="template-hint" class="detail" data-i18n>Insert</span>
+          <button type="button" id="assistant-placeholder" class="tag" data-insert="{assistant}" title="The assistant’s name, such as ChatGPT" data-i18n-title disabled>{assistant}</button>
+          <button type="button" id="content-placeholder" class="tag" data-insert="{reply}" title="The shared text. Without it, the text goes at the end" data-i18n-title disabled>{reply}</button>
+          <button type="button" id="reset-message" class="text-button" data-i18n disabled>Reset</button>
         </div>
       </div>
     </form>
     <p id="saved" class="saved" role="status" aria-live="polite"></p>
   </section>
 
-  <footer><b>Send both</b> sits beside each chat’s Send button. <b>Share with…</b> sits beside Copy. Use <b>Select messages…</b> in the composer’s arrow menu to share several messages together.</footer>
+  <section>
+    <h2 data-i18n>Language</h2>
+    <div class="card">
+      <div class="row template-choice">
+        <label for="language" data-i18n>Interface language</label>
+        <select id="language">
+          <option value="auto" data-i18n>Automatic (browser language)</option>
+          <option value="en">English</option>
+          <option value="zh-CN">简体中文</option>
+        </select>
+      </div>
+    </div>
+  </section>
+
+  <footer data-i18n-rich><b>Send both</b> sits beside each chat’s Send button. <b>Share with…</b> sits beside Copy. Use <b>Select messages…</b> in the composer’s arrow menu to share several messages together.</footer>
+  <script src="i18n.js"></script>
+  <script src="i18n-zh-CN.js"></script>
   <script type="module" src="popup.js"></script>
   <script type="module" src="popup-reading.js"></script>
 </body>

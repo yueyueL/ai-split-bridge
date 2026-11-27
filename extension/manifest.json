@@ -57,6 +57,8 @@
         "https://grok.com/*"
       ],
       "js": [
+        "i18n.js",
+        "i18n-zh-CN.js",
         "reply-files.js",
         "adapters.js",
         "reading-width.js",

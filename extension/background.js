@@ -1,30 +1,37 @@
+import './i18n.js';
+import './i18n-zh-CN.js';
 import { createTabManager } from './tabs.js';
 import { createBridge, validateFiles } from './bridge.js';
 import { describe, providerFor, PROVIDERS } from './providers.js';
 import { composeShare, loadSettings } from './settings.js';
 
+const i18n = globalThis.AISplitI18n;
+const { t } = i18n;
+// The service worker can be started by any request, so each one waits for the saved language.
+const languageReady = i18n.follow(chrome);
 const manager = createTabManager(chrome);
 const bridge = createBridge(chrome, manager);
 
 // The share message and mode are read here, never taken from the page, so a site cannot change what is sent.
 async function shareReply(source, choice, reply, files = [], kind = 'reply') {
-  if (!['reply', 'prompt', 'conversation'].includes(kind)) throw new Error('Choose a prompt, reply, or conversation to share.');
+  if (!['reply', 'prompt', 'conversation'].includes(kind)) throw new Error(t('Choose a prompt, reply, or conversation to share.'));
   validateFiles(files);
-  if (typeof reply !== 'string' || (!reply.trim() && !files.length)) throw new Error('This selection has no text or files to share.');
-  const settings = await loadSettings(chrome.storage.sync);
-  const text = composeShare(settings, { assistant: PROVIDERS[providerFor(source.url)].name, reply, kind });
+  if (typeof reply !== 'string' || (!reply.trim() && !files.length)) throw new Error(t('This selection has no text or files to share.'));
+  const settings = await loadSettings(chrome.storage.sync, i18n.language);
+  const text = composeShare(settings, { assistant: PROVIDERS[providerFor(source.url)].name, reply, kind }, i18n.language);
   return bridge.share(source.id, choice, text, { send: settings.shareMode === 'send', files });
 }
 
 async function handle(message, sender) {
-  if (!message || typeof message.type !== 'string' || sender.id !== chrome.runtime.id) throw new Error('Unsupported request.');
+  await languageReady;
+  if (!message || typeof message.type !== 'string' || sender.id !== chrome.runtime.id) throw new Error(t('Unsupported request.'));
   if (sender.tab) {
-    if (sender.frameId !== 0 || !providerFor(sender.url)) throw new Error('Only the main AI chat page can use the bridge.');
+    if (sender.frameId !== 0 || !providerFor(sender.url)) throw new Error(t('Only the main AI chat page can use the bridge.'));
     const source = await manager.supported(sender.tab.id);
-    if (providerFor(source.url) !== providerFor(sender.url)) throw new Error('The chat changed. Refresh and try again.');
+    if (providerFor(source.url) !== providerFor(sender.url)) throw new Error(t('The chat changed. Refresh and try again.'));
     if (message.type === 'ASB_CONTEXT') {
       const { source: unused, ...context } = await manager.context(source.id);
-      return { ...context, shareMode: (await loadSettings(chrome.storage.sync)).shareMode };
+      return { ...context, shareMode: (await loadSettings(chrome.storage.sync, i18n.language)).shareMode };
     }
     const compareChoice = { peerId: message.peerId, peerProvider: message.peerProvider, targetId: message.targetId, turns: message.turns };
     if (message.type === 'ASB_COMPARE_STATUS') return bridge.compareStatus(source.id, compareChoice);
@@ -36,9 +43,9 @@ async function handle(message, sender) {
         case 'ASB_COMPARE':
         case 'ASB_CROSS_REVIEW':
         case 'ASB_REVISE': {
-          const settings = await loadSettings(chrome.storage.sync);
-          const menu = message.type === 'ASB_COMPARE' ? 'Compare' : 'Cross-review';
-          if (settings.shareMode !== message.expectedMode) throw new Error(`Sharing settings changed. Open ${menu} again to confirm the delivery mode.`);
+          const settings = await loadSettings(chrome.storage.sync, i18n.language);
+          const menu = message.type === 'ASB_COMPARE' ? t('Compare') : t('Cross-review');
+          if (settings.shareMode !== message.expectedMode) throw new Error(t('Sharing settings changed. Open {menu} again to confirm the delivery mode.', { menu }));
           if (message.type === 'ASB_CROSS_REVIEW') return bridge.crossReview(source.id, compareChoice, message.action, settings);
           if (message.type === 'ASB_REVISE') return bridge.revise(source.id, compareChoice, message.reviewId, settings);
           return bridge.compare(source.id, compareChoice, settings);
@@ -46,11 +53,11 @@ async function handle(message, sender) {
         case 'ASB_SEND': return bridge.send(source.id, message.targetIds);
         case 'ASB_SHARE': return shareReply(source, choice, message.reply, message.files, message.kind);
         case 'ASB_SHOW': return bridge.show(source.id, choice);
-        default: throw new Error('Unsupported chat action.');
+        default: throw new Error(t('Unsupported chat action.'));
       }
     });
   }
-  if (sender.url !== chrome.runtime.getURL('popup.html')) throw new Error('Open the extension popup to manage tabs.');
+  if (sender.url !== chrome.runtime.getURL('popup.html')) throw new Error(t('Open the extension popup to manage tabs.'));
   const tabs = await chrome.tabs.query({ currentWindow: true });
   const windowId = tabs[0]?.windowId;
   if (message.type === 'ASB_LIST') {
@@ -60,19 +67,19 @@ async function handle(message, sender) {
     return { ok: true, tabs: tabs.map(describe).filter(Boolean), activeId: active?.id, canManageSplit: manager.canManageSplit(), peer: context?.peer ?? null };
   }
   if (message.type === 'ASB_PAIR') {
-    if (!tabs.some(t => t.id === message.leftId) || !tabs.some(t => t.id === message.rightId)) throw new Error('Choose chats in this window.');
+    if (!tabs.some(t => t.id === message.leftId) || !tabs.some(t => t.id === message.rightId)) throw new Error(t('Choose chats in this window.'));
     return bridge.locked(windowId, () => manager.pair(message.leftId, message.rightId));
   }
   if (message.type === 'ASB_OPEN') {
-    if (!Object.hasOwn(PROVIDERS, message.provider)) throw new Error('Unknown assistant.');
+    if (!Object.hasOwn(PROVIDERS, message.provider)) throw new Error(t('Unknown assistant.'));
     await chrome.tabs.create({ url: PROVIDERS[message.provider].url, windowId, active: false });
-    return { ok: true, message: `${PROVIDERS[message.provider].name} opened in a new tab. Sign in if needed.` };
+    return { ok: true, message: t('{name} opened in a new tab. Sign in if needed.', { name: PROVIDERS[message.provider].name }) };
   }
-  throw new Error('Unsupported popup action.');
+  throw new Error(t('Unsupported popup action.'));
 }
 
 chrome.runtime.onMessage.addListener((message, sender, respond) => {
-  handle(message, sender).then(respond, error => respond({ ok: false, error: error.message || 'The action could not be completed.' }));
+  handle(message, sender).then(respond, error => respond({ ok: false, error: error.message || t('The action could not be completed.') }));
   return true;
 });
 

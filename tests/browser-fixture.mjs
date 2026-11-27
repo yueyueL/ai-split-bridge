@@ -127,6 +127,16 @@ const readingStorage = `(() => {
   chrome.storage.onChanged = {addListener(fn) { listeners.push(fn); }};
 })();`;
 
+// The language chosen in the fixture popup is kept for this tab, so the provider pages open in it too.
+const syncStorage = `(() => {
+  const read = () => JSON.parse(sessionStorage.getItem('fixture-sync') || '{}');
+  chrome.storage ||= {};
+  chrome.storage.sync = {
+    async get(key) { const synced = read(); return key == null ? synced : (key in synced ? {[key]: synced[key]} : {}); },
+    async set(value) { sessionStorage.setItem('fixture-sync', JSON.stringify({...read(), ...value})); }
+  };
+})();`;
+
 const server = createServer(async (req, res) => {
   try {
     const url = new URL(req.url, 'http://localhost');
@@ -136,7 +146,7 @@ const server = createServer(async (req, res) => {
     const layout = ['project', 'new'].includes(url.searchParams.get('layout')) ? url.searchParams.get('layout') : 'chat';
     const empty = (provider === 'chatgpt' && layout === 'project') || (provider === 'claude' && layout === 'new');
     const file = url.pathname.slice(1);
-    if (['adapters.js', 'content.js', 'popup.js', 'popup-reading.js', 'popup.css', 'reading.js', 'reading-turns.js', 'reading-width.js', 'providers.js', 'settings.js', 'reply-files.js', 'download-capture.js'].includes(file)) {
+    if (['i18n.js', 'i18n-zh-CN.js', 'adapters.js', 'content.js', 'popup.js', 'popup-reading.js', 'popup.css', 'reading.js', 'reading-turns.js', 'reading-width.js', 'providers.js', 'settings.js', 'reply-files.js', 'download-capture.js'].includes(file)) {
       let source = await readFile(new URL(`../extension/${file}`, import.meta.url), 'utf8');
       if (file === 'adapters.js') source = source.replace('hosts.includes(location.hostname)', `hosts.includes(${JSON.stringify(hosts[provider])})`);
       res.setHeader('Content-Type', file.endsWith('.css') ? 'text/css' : 'text/javascript');
@@ -246,7 +256,8 @@ const server = createServer(async (req, res) => {
           return {ok:false,error:'This local fixture does not handle ' + m.type + '.'};
         }}};
         ${readingStorage}
-      </script><script src="/download-capture.js"></script><script src="/reply-files.js"></script><script src="/adapters.js?provider=${provider}"></script><script src="/reading-width.js"></script><script src="/reading-turns.js"></script><script src="/reading.js"></script><script src="/content.js"></script>
+        ${syncStorage}
+      </script><script src="/download-capture.js"></script><script src="/i18n.js"></script><script src="/i18n-zh-CN.js"></script><script src="/reply-files.js"></script><script src="/adapters.js?provider=${provider}"></script><script src="/reading-width.js"></script><script src="/reading-turns.js"></script><script src="/reading.js"></script><script src="/content.js"></script>
       <script>
         const editor=document.querySelector('.composer [contenteditable]'); let clicks=0;let inputs=0;
         document.getElementById('site-send').onclick=()=>clicks++;

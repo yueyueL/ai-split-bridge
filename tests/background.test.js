@@ -431,3 +431,50 @@ test('revision refuses mixed rounds, unrelated new replies, navigation and chang
     });
   }
 });
+
+// ---------- Interface language ----------
+test('with Chinese saved, shared text, review prompts and results are all written in Chinese', async t => {
+  const { model, request } = await load(t, chatTabs(), { sync: { language: 'zh-CN' } });
+  model.respond = (_id, message) => message.type === 'ASB_READ_DRAFT' ? { ok: true, text: 'Hello' } : { ok: true };
+  const shared = await request({ type: 'ASB_SHARE', targetId: 2, reply: 'Review this.' });
+  assert.deepEqual([shared.ok, shared.message], [true, '已发送到 Claude。']);
+  assert.match(model.messages('ASB_PREPARE').at(-1).args[1].text, /^下面是 ChatGPT 的回复：\n\nReview this\.\n\n你怎么看？/);
+  const refused = await request({ type: 'ASB_SHARE', targetId: 2, reply: '  ' });
+  assert.deepEqual([refused.ok, refused.error], [false, '所选内容没有可分享的文字或文件。']);
+  const popup = { id: 'test-extension', url: 'chrome-extension://test-extension/popup.html' };
+  assert.equal((await request({ type: 'ASB_OPEN', provider: 'grok' }, popup)).message, 'Grok 已在新标签页中打开。如有需要请先登录。');
+
+  model.respond = reviewPages(model);
+  model.calls.length = 0;
+  const review = await request(crossChoice);
+  assert.equal(review.message, '互评已发送到两个聊天。每份点评会出现在各自的窗格中。');
+  for (const { args: [id, payload] } of model.messages('ASB_PREPARE')) {
+    assert.match(payload.text, /^请就事论事地点评下面的回答。/);
+    assert.equal(payload.text.slice(payload.review.quotedStart), `${id === 1 ? 'Claude（右侧窗格）' : 'ChatGPT（左侧窗格）'}的回答\nIndependent answer from pane ${3 - id}.`);
+  }
+
+  model.calls.length = 0;
+  const revised = await request(revisionChoice);
+  assert.equal(revised.message, '已请 ChatGPT 修订回答。');
+  const draft = model.messages('ASB_STAGE')[0].args[1].text;
+  assert.match(draft, /^请根据下面的点评修订你原来的回答。/);
+  assert.ok(draft.includes('你原来的回答（ChatGPT，左侧窗格）\nOriginal answer from 1.'));
+  assert.ok(draft.includes('Claude（右侧窗格）对你的回答的点评\nCritique from 2 about 1.'));
+
+  model.respond = comparePages(model);
+  model.calls.length = 0;
+  const compared = await request({ type: 'ASB_COMPARE', peerId: 2, targetId: 2, turns: ['turn-1', 'turn-2'], expectedMode: 'send' });
+  assert.equal(compared.message, '对比已发送到 Claude。');
+  const comparison = model.messages('ASB_STAGE')[0].args[1].text;
+  assert.match(comparison, /^请运用你自己的独立判断，对比下面两个回答。/);
+  assert.ok(comparison.endsWith('ChatGPT（左侧窗格）\nIndependent answer from pane 1.\n\nClaude（右侧窗格）\nIndependent answer from pane 2.'));
+  const stale = await request({ type: 'ASB_COMPARE', peerId: 2, targetId: 2, turns: ['turn-1', 'turn-2'], expectedMode: 'draft' });
+  assert.equal(stale.error, '分享设置已变化。请重新打开“对比”以确认发送方式。');
+});
+
+test('a later request with nothing saved is answered in English again', async t => {
+  const { model, request } = await load(t, chatTabs());
+  model.respond = () => ({ ok: true });
+  const shared = await request({ type: 'ASB_SHARE', targetId: 2, reply: 'Review this.' });
+  assert.deepEqual([shared.ok, shared.message], [true, 'Sent to Claude.']);
+});

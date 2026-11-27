@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { JSDOM } from 'jsdom';
+import { translations } from './translations.js';
 
 const source = readFileSync(new URL('../extension/content.js', import.meta.url), 'utf8');
 const settle = async () => { for (let i = 0; i < 6; i += 1) await new Promise(resolve => setImmediate(resolve)); };
@@ -56,6 +57,7 @@ function setup(t, context = split()) {
   };
   dom.window.AISplitAdapters = adapter;
   dom.window.chrome = { runtime: { id: 'extension', onMessage: { addListener(fn) { listener = fn; } }, async sendMessage(message) { calls.push(JSON.parse(JSON.stringify(message))); return model.respond(message); } } };
+  dom.window.eval(translations);
   dom.window.eval(source);
   const hosts = kind => [...document.querySelectorAll(`ai-split-bridge[data-ai-split-bridge='${kind}']`)];
   const layer = hosts('layer')[0].shadowRoot;
@@ -602,4 +604,75 @@ test('a site revealing a different composer control through attributes triggers 
   view.document.querySelector('#site-send').hidden=true;
   await new Promise(resolve=>setTimeout(resolve,300));
   assert.equal(view.composer().parentNode,group);
+});
+
+// ---------- Interface language ----------
+test('the controls beside the composer and replies change language as soon as one is chosen', async t => {
+  const view = setup(t);
+  await settle();
+  const send = () => view.pill().querySelector('.send');
+  const shareButtons = () => view.hosts('share').map(host => host.shadowRoot.querySelector('.share-button'));
+  const latest = () => [...view.hosts('share').at(-1).shadowRoot.querySelectorAll('.share-button')].map(node => node.textContent);
+  assert.equal(send().textContent, 'Send both');
+  assert.deepEqual(latest(), ['Share with…', 'Compare', 'Cross-review', '']);
+
+  view.dom.window.AISplitI18n.choose('zh-CN');
+  await settle();
+  assert.equal(send().textContent, '同时发送');
+  assert.equal(send().title, '在这里发送，并同时发送到 Claude（Ctrl+Shift+Enter）');
+  assert.equal(view.pill().querySelector('.more').getAttribute('aria-label'), '选择聊天和对话操作');
+  assert.equal(view.hosts('share').length, 2, 'each reply keeps exactly one share control');
+  assert.deepEqual(latest(), ['分享到…', '对比', '互评', '']);
+  assert.equal(shareButtons()[0].title, '把这条回复分享到另一个聊天');
+  const [, compare, review, options] = view.hosts('share').at(-1).shadowRoot.querySelectorAll('.share-button');
+  assert.equal(compare.title, '对比两侧的最新回答');
+  assert.equal(review.getAttribute('aria-label'), '让两个回答互评');
+  assert.equal(options.title, '选择互评方式，或修订一个回答');
+
+  view.dom.window.AISplitI18n.choose('en');
+  await settle();
+  assert.equal(send().textContent, 'Send both');
+  assert.deepEqual(latest(), ['Share with…', 'Compare', 'Cross-review', '']);
+  assert.equal(view.hosts('composer').length, 1);
+});
+
+test('menus, their hints and notices are written in Chinese when it is chosen', async t => {
+  const view = setup(t);
+  await settle();
+  view.dom.window.AISplitI18n.choose('zh-CN');
+  await settle();
+  await view.click(view.pill().querySelector('.more'));
+  assert.equal(view.menu.querySelector('.heading').textContent, '把这条提问发送到');
+  assert.equal(view.row('Claude').querySelector('.detail').textContent, '右侧 · Chat two');
+  assert.equal(view.row('Gemini').querySelector('.detail').textContent, '其他标签页 · Trip ideas');
+  assert.equal(view.row('Grok').querySelector('.detail').textContent, '已休眠 · 请先打开它的标签页');
+  assert.equal(view.row('Gemini').querySelector('.show').title, '在右侧显示 Gemini');
+  assert.deepEqual([...view.menu.querySelectorAll('.footer .link')].map(node => node.textContent), ['对比最新回答…', '互评…']);
+  assert.equal(view.menu.querySelector('.footer .hint').textContent, '按 Ctrl+Shift+Enter 发送到已勾选的聊天');
+  await view.click(view.row('Gemini').querySelector('[role=menuitemcheckbox]'));
+  assert.equal(view.menu.querySelector('.primary').textContent, '全部发送');
+  await view.click(view.row('Claude').querySelector('[role=menuitemcheckbox]'));
+  await view.click(view.row('Gemini').querySelector('[role=menuitemcheckbox]'));
+  assert.equal(view.pill().querySelector('.send').textContent, '发送到…');
+  assert.equal(view.menu.querySelector('.primary').textContent, '选择一个聊天');
+  await view.click(view.pill().querySelector('.more'));
+
+  const share = view.hosts('share')[0].shadowRoot.querySelector('.share-button');
+  await view.click(share);
+  assert.equal(view.menu.querySelector('.heading').textContent, '把这条回复发送到');
+  assert.equal(view.menu.querySelector('.hint').textContent, '会连同你的分享消息立即发送。');
+  assert.equal(view.row('Gemini').querySelector('.detail').textContent, '将在右侧打开 · Trip ideas');
+  await view.click(share);
+
+  view.model.respond = message => message.type === 'ASB_CONTEXT' ? view.model.context : { ok: false };
+  await view.click(view.hosts('share')[0].shadowRoot.querySelector('.share-button'));
+  await view.click(view.row('Claude'));
+  assert.equal(view.toast.textContent, '无法完成该操作。');
+
+  view.model.respond = message => message.type === 'ASB_CONTEXT' ? view.model.context : view.model.compareStatus;
+  const compare = view.hosts('share').at(-1).shadowRoot.querySelector('.share-button.compare');
+  await view.click(compare);
+  assert.equal(view.menu.querySelector('.heading').textContent, '由谁来对比这两个最新回答？');
+  assert.equal(view.menu.querySelector('.hint').textContent, '选定后，会把两个回答都发送到该聊天进行对比。');
+  assert.equal(view.row('ChatGPT').querySelector('.detail').textContent, '左侧');
 });

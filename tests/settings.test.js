@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { composeShare, composeComparison, DEFAULT_SHARE_MESSAGE, DEFAULT_PROMPT_MESSAGE, DEFAULT_CONVERSATION_MESSAGE, DEFAULT_COMPARISON_MESSAGE, REVIEW_TEMPLATES, loadSettings, MAX_SHARE_MESSAGE, readSettings, saveSettings } from '../extension/settings.js';
+import { composeShare, composeComparison, defaultMessages, DEFAULT_SHARE_MESSAGE, DEFAULT_PROMPT_MESSAGE, DEFAULT_CONVERSATION_MESSAGE, DEFAULT_COMPARISON_MESSAGE, REVIEW_TEMPLATES, loadSettings, MAX_SHARE_MESSAGE, readSettings, saveSettings } from '../extension/settings.js';
 
 const defaults = {
   shareMode: 'send', shareMessage: DEFAULT_SHARE_MESSAGE, promptMessage: DEFAULT_PROMPT_MESSAGE,
@@ -137,4 +137,58 @@ test('custom prompts and conversation messages support content placeholders with
     `My notes from Claude:\n${selected}\nPlease check assumptions.`);
   assert.equal(composeShare({ conversationMessage: 'Summarize the conversation.' }, { assistant: 'Grok', reply: selected, kind: 'conversation' }),
     `Summarize the conversation.\n\n${selected}`, 'selected messages remain included when the placeholder is removed');
+});
+
+// ---------- Interface language ----------
+const placeholders = text => [...text.matchAll(/\{(\w+)\}/g)].map(match => match[1]).sort();
+
+test('Chinese has its own default for every message, with the same placeholders as English', async () => {
+  const chinese = defaultMessages('zh-CN');
+  assert.deepEqual(Object.keys(chinese).sort(), Object.keys(defaults).filter(key => key !== 'shareMode').sort());
+  for (const [key, message] of Object.entries(chinese)) {
+    assert.deepEqual(placeholders(message), placeholders(defaults[key]), key);
+    if (defaults[key]) assert.match(message, /[一-鿿]/, `${key} is written in Chinese`);
+  }
+  assert.match(chinese.shareMessage, /^下面是 \{assistant\} 的回复：\n\n\{reply\}\n\n/);
+  assert.equal(defaultMessages('en').shareMessage, DEFAULT_SHARE_MESSAGE);
+  assert.equal(defaultMessages('fr').shareMessage, DEFAULT_SHARE_MESSAGE, 'an unknown language falls back to English');
+});
+
+test('with nothing customized, messages follow the interface language', async () => {
+  const storage = memory();
+  assert.deepEqual(await loadSettings(storage, 'zh-CN'), { shareMode: 'send', ...defaultMessages('zh-CN') });
+
+  // Saving any setting also stores the messages then in use. Those stored defaults are not customizations.
+  await saveSettings(storage, { shareMode: 'draft' });
+  assert.equal(storage.data.settings.shareMessage, DEFAULT_SHARE_MESSAGE);
+  assert.deepEqual(await loadSettings(storage, 'zh-CN'), { shareMode: 'draft', ...defaultMessages('zh-CN') });
+
+  await saveSettings(storage, { shareMode: 'send' }, 'zh-CN');
+  assert.equal(storage.data.settings.shareMessage, defaultMessages('zh-CN').shareMessage);
+  assert.deepEqual(await loadSettings(storage), defaults);
+  assert.deepEqual(await loadSettings({ async get() { return { settings: { shareMessage: "Here is {assistant}'s reply:\n\n{reply}\n\nWhat do you think? Point out anything wrong or missing." } }; } }, 'zh-CN'),
+    { shareMode: 'send', ...defaultMessages('zh-CN') }, 'the earlier English default is upgraded too');
+});
+
+test('a customized message is kept in every language', async () => {
+  const storage = memory();
+  await saveSettings(storage, { shareMessage: 'My own words: {reply}', reviewGuidance: 'Cite sources.' }, 'zh-CN');
+  for (const language of ['en', 'zh-CN']) {
+    const settings = await loadSettings(storage, language);
+    assert.equal(settings.shareMessage, 'My own words: {reply}');
+    assert.equal(settings.reviewGuidance, 'Cite sources.');
+    assert.equal(settings.promptMessage, defaultMessages(language).promptMessage);
+  }
+});
+
+test('shared text and comparisons are wrapped in the default of the interface language', async () => {
+  const settings = await loadSettings(memory(), 'zh-CN');
+  const shared = composeShare(settings, { assistant: 'Claude', reply: 'Use {reply} twice.' }, 'zh-CN');
+  assert.match(shared, /^下面是 Claude 的回复：\n\nUse \{reply\} twice\.\n\n你怎么看？/);
+  assert.match(composeShare(settings, { assistant: 'Gemini', reply: 'What is 2+2?', kind: 'prompt' }, 'zh-CN'), /与 Gemini 的聊天[^]*What is 2\+2\?[^]*请回应/);
+  assert.match(composeShare(undefined, { assistant: 'Gemini', reply: 'A\n\nB', kind: 'conversation' }, 'zh-CN'), /与 Gemini 对话[^]*A\n\nB[^]*继续/);
+  const comparison = composeComparison(settings, { answers: 'Left\n\nRight' }, 'zh-CN');
+  assert.match(comparison, /^请运用你自己的独立判断/);
+  assert.ok(comparison.endsWith('\n\nLeft\n\nRight'));
+  assert.match(composeComparison(undefined, { answers: 'Left\n\nRight' }), /^Compare the two answers below/);
 });

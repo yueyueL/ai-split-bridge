@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { JSDOM } from 'jsdom';
+import { translations } from './translations.js';
 
 const scripts = await Promise.all(['adapters.js', 'content.js'].map(file =>
   readFile(new URL(`../extension/${file}`, import.meta.url), 'utf8')));
@@ -58,6 +59,7 @@ test('Chinese Gemini exposes Share for both speakers and transfers the chosen me
       return { ok: true, message: 'Draft added to Claude.' };
     },
   } };
+  window.eval(translations);
   for (const source of scripts) window.eval(source);
   await settle();
   const editorPill = doc.querySelector('.input-buttons-wrapper-bottom [data-ai-split-bridge="composer"]');

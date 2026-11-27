@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { JSDOM } from 'jsdom';
 import { providerFor } from '../extension/providers.js';
+import { translations } from './translations.js';
 
 const read = file => readFile(new URL('../extension/' + file, import.meta.url), 'utf8');
 const [turnsScript, readingScript, html, popupScript] = await Promise.all(['reading-turns.js', 'reading.js', 'popup.html', 'popup-reading.js'].map(read));
@@ -33,6 +34,7 @@ function harness(t) {
     w.HTMLElement.prototype.scrollIntoView = function () { scrolled = this; };
     w.AISplitAdapters = { provider: 'chatgpt', messageElements: () => [...d.querySelectorAll('[data-role]')].map(element => ({ element, role: element.dataset.role })) };
     w.AISplitReadingWidth = { setEnabled(b) { wide = b; }, refresh() {} };
+    w.eval(translations);
     w.eval(turnsScript);
     w.eval(readingScript);
     await tick();
@@ -56,6 +58,7 @@ test('popup options enable page tools and clicking a bookmark reveals its reply 
       async sendMessage(id, msg, options) { assert.equal(id, 2); assert.equal(options.frameId, 0); return p.send(msg); } } };
     w.close = () => { closed = true; close(); };
     w.providerFor = providerFor;
+    w.eval(translations);
     w.eval(popupScript.replace(/^import .*\n/, ''));
     await tick();
     return w.document;
@@ -107,4 +110,53 @@ test('a stale popup cannot jump in a different chat and temporary chats keep mar
   assert.deepEqual(Object.keys(h.data).sort(), keys);
   p.w.history.pushState({}, '', '/c/a');
   assert.equal((await list()).total, 1);
+});
+
+test('message tools and the popup’s bookmark list follow the chosen language', async t => {
+  const h = harness(t);
+  await h.local.set({ readingTools: true });
+  const p = await h.page();
+  const control = (i, action) => p.d.querySelectorAll('[data-asb-reading-ui]')[i].shadowRoot.querySelector(`[data-action="${action}"]`);
+  assert.equal(control(0, 'fold').title, 'Hide prompt');
+  assert.equal(control(1, 'bookmark').title, 'Bookmark reply');
+
+  p.w.AISplitI18n.choose('zh-CN');
+  assert.equal(control(0, 'fold').title, '隐藏提问');
+  assert.equal(control(1, 'fold').textContent, '隐藏');
+  assert.equal(control(1, 'bookmark').getAttribute('aria-label'), '为回复添加书签');
+  p.click(1, 'bookmark');
+  p.click(0, 'fold');
+  await tick();
+  assert.equal(control(1, 'bookmark').title, '移除书签');
+  assert.equal(control(0, 'fold').textContent, '显示提问');
+
+  const popup = new JSDOM(html, { url: popupUrl, runScripts: 'outside-only' });
+  const w = popup.window;
+  t.after(() => w.close());
+  w.chrome = { ...h.chrome, tabs: { async query() { return [{ id: 2, url: p.w.location.href }]; }, async sendMessage(_id, message) { return p.send(message); } } };
+  w.providerFor = providerFor;
+  w.eval(translations);
+  w.AISplitI18n.use('zh-CN');
+  w.eval(popupScript.replace(/^import .*\n/, ''));
+  await tick();
+  await tick();
+  assert.match(w.document.querySelector('#reading-items button').textContent, /^回复 · .*Private answer/);
+  w.AISplitI18n.choose('en');
+  await tick();
+  await tick();
+  assert.match(w.document.querySelector('#reading-items button').textContent, /^Reply · .*Private answer/);
+
+  await h.local.remove('readingTools');
+  const empty = new JSDOM(html, { url: popupUrl, runScripts: 'outside-only' });
+  t.after(() => empty.window.close());
+  empty.window.chrome = { ...h.chrome, tabs: { async query() { return [{ id: 3, url: 'https://example.com/' }]; } } };
+  empty.window.providerFor = providerFor;
+  empty.window.eval(translations);
+  empty.window.AISplitI18n.use('zh-CN');
+  empty.window.eval(popupScript.replace(/^import .*\n/, ''));
+  await tick();
+  empty.window.document.querySelector('#readingTools').click();
+  await tick();
+  await tick();
+  assert.equal(empty.window.document.querySelector('#reading-detail').textContent, '打开一个 AI 聊天即可查看其中的书签。');
 });

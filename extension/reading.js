@@ -4,6 +4,8 @@
   const width = globalThis.AISplitReadingWidth;
   const adapter = globalThis.AISplitAdapters;
   if (!turns || !width || !adapter || globalThis.AISplitReading) return;
+  const i18n = globalThis.AISplitI18n;
+  const { t } = i18n;
 
   const local = chrome.storage.local;
   const prefix = `reading:${location.origin}:`;
@@ -45,7 +47,7 @@
         if (page === originPage) {
           restorePage();
           refresh();
-          globalThis.AISplitReading.notify?.('Could not save your reading change. Try again.');
+          globalThis.AISplitReading.notify?.(t('Could not save your reading change. Try again.'));
         }
       }).finally(() => {
         if (writes.get(name) !== done) return;
@@ -114,11 +116,11 @@
       return { ok: true, page, items, total: bookmarks.size };
     }
     if (message.page !== page || !tools || !bookmarks.has(message.key)) {
-      throw new Error('The conversation or bookmark changed. Reopen the popup and choose the message again.');
+      throw new Error(t('The conversation or bookmark changed. Reopen the popup and choose the message again.'));
     }
     const found = await turns.jump(message.key);
     if (!found || message.page !== pageToken()) {
-      throw new Error('This message is not available yet. Load earlier messages in this chat and reopen Bookmarks.');
+      throw new Error(t('This message is not available yet. Load earlier messages in this chat and reopen Bookmarks.'));
     }
     return { ok: true };
   }
@@ -130,5 +132,6 @@
   });
   globalThis.navigation?.addEventListener('currententrychange', refresh);
   addEventListener('popstate', refresh);
+  i18n.onChange(refresh);
   globalThis.AISplitReading = { refresh, notify: null };
 })();

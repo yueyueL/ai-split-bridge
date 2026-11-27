@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { JSDOM } from 'jsdom';
+import { translations } from './translations.js';
 
 const source = await readFile(new URL('../extension/download-capture.js', import.meta.url), 'utf8');
 
@@ -26,6 +27,7 @@ function fixture(t, html) {
   window.HTMLAnchorElement.prototype.click = function () { escaped.push(this.download); };
   const nativeClick = window.HTMLAnchorElement.prototype.click;
   const nativeURL = window.URL.createObjectURL;
+  window.eval(translations);
   window.eval(source);
   function download(name, text, duplicate = false) {
     const anchor = document.createElement('a');

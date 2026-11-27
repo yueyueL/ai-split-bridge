@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { JSDOM } from 'jsdom';
+import { translations } from './translations.js';
 
 const adapter = await readFile(new URL('../extension/adapters.js', import.meta.url), 'utf8');
 const reading = await readFile(new URL('../extension/reading-turns.js', import.meta.url), 'utf8');
@@ -30,6 +31,7 @@ function setup(t, markup) {
     node.dispatchEvent(new window.InputEvent('input', { bubbles: true }));
     return true;
   };
+  window.eval(translations);
   window.eval(adapter);
   return { window, doc: window.document, api: window.AISplitAdapters };
 }

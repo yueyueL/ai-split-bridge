@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { JSDOM } from 'jsdom';
 import * as settingsModule from '../extension/settings.js';
+import { translations } from './translations.js';
 
 const html = await readFile(new URL('../extension/popup.html', import.meta.url), 'utf8');
 const script = (await readFile(new URL('../extension/popup.js', import.meta.url), 'utf8'))
@@ -19,6 +20,7 @@ async function popup(t, storage) {
   const { window } = dom;
   window.testSettings = settingsModule;
   window.chrome = { storage: { sync: storage }, runtime: { sendMessage: async () => ({ ok: true, tabs: [], canManageSplit: false }) } };
+  window.eval(translations);
   window.eval(script);
   const $ = selector => window.document.querySelector(selector);
   await until(() => !$('#share-kind').disabled || $('#saved').textContent.startsWith('Could not load'));
@@ -194,4 +196,73 @@ test('cross-review shares one optional instruction and retains each mode’s ind
   assert.equal(reset.$('#assistant-placeholder').hidden, false);
   assert.equal(reset.$('#content-placeholder').hidden, false);
   assert.equal(reset.$('#template-hint').textContent, 'Insert');
+});
+
+// ---------- Interface language ----------
+function memory(data = {}) {
+  return {
+    data,
+    async get(key) { return key == null ? structuredClone(data) : { [key]: structuredClone(data[key]) }; },
+    async set(value) { Object.assign(data, structuredClone(value)); },
+  };
+}
+const shown = (view, selector) => view.$(selector).textContent;
+function pickLanguage(view, value) {
+  view.$('#language').value = value;
+  view.$('#language').dispatchEvent(new view.window.Event('change'));
+}
+const englishFooter = '“Send both” sits beside each chat’s Send button. “Share with…” sits beside Copy. Use “Select messages…” in the composer’s arrow menu to share several messages together.'.replace(/[“”]/g, '');
+
+test('the popup opens in English and switches to Chinese and back as soon as a language is chosen', async t => {
+  const storage = memory();
+  const view = await popup(t, storage);
+  assert.equal(view.$('#language').value, 'auto');
+  assert.equal(shown(view, '#pair'), 'Create split');
+  assert.equal(shown(view, '#message-label'), 'Message with the shared reply');
+  assert.equal(shown(view, 'footer'), englishFooter);
+
+  pickLanguage(view, 'zh-CN');
+  assert.equal(view.window.document.documentElement.lang, 'zh-CN');
+  assert.equal(shown(view, '#pair'), '创建分屏');
+  assert.equal(shown(view, '#share-kind option[value="reply"]'), '回复');
+  assert.equal(view.$('#share-kind optgroup').label, '互评');
+  assert.equal(shown(view, '#message-label'), '分享回复时附带的消息');
+  assert.equal(shown(view, '#mode-detail'), '立即发送分享的消息、对比和互评。');
+  assert.equal(view.$('#assistant-placeholder').title, '助手的名称，例如 ChatGPT');
+  assert.deepEqual([...view.window.document.querySelectorAll('footer b')].map(node => node.textContent), ['同时发送', '分享到…', '选择消息…']);
+  assert.equal(view.$('#share-message').value, settingsModule.defaultMessages('zh-CN').shareMessage);
+  assert.equal(shown(view, '#language option[value="zh-CN"]'), '简体中文');
+  await until(() => storage.data.language === 'zh-CN');
+  await until(() => shown(view, '#capability') === '右键点击 AI 聊天标签页，选择“分屏视图”来配对。');
+
+  pickLanguage(view, 'en');
+  assert.equal(view.window.document.documentElement.lang, 'en');
+  assert.equal(shown(view, '#pair'), 'Create split');
+  assert.equal(shown(view, 'footer'), englishFooter);
+  assert.equal(view.window.document.querySelectorAll('footer b').length, 3);
+  assert.equal(view.$('#share-message').value, settingsModule.DEFAULT_SHARE_MESSAGE);
+  await until(() => storage.data.language === 'en');
+  await until(() => shown(view, '#capability') === 'Right-click an AI chat tab and choose Split View to pair it.');
+});
+
+test('a saved language is used when the popup opens, and a customized message is left as written', async t => {
+  const storage = memory({ language: 'zh-CN', settings: { shareMessage: 'Existing reply: {reply}' } });
+  const view = await popup(t, storage);
+  assert.equal(view.$('#language').value, 'zh-CN');
+  assert.equal(shown(view, '#pair'), '创建分屏');
+  assert.equal(view.$('#share-message').value, 'Existing reply: {reply}');
+  view.choose('prompt');
+  assert.equal(shown(view, '#message-label'), '分享提问时附带的消息');
+  assert.equal(view.$('#share-message').value, settingsModule.defaultMessages('zh-CN').promptMessage);
+  view.choose('reviewCommon');
+  assert.equal(view.$('#share-message').placeholder, '例如：每条批评都要给出依据。');
+
+  view.choose('reply');
+  view.$('#reset-message').click();
+  await until(() => shown(view, '#saved') === '已保存');
+  assert.equal(storage.data.settings.shareMessage, settingsModule.defaultMessages('zh-CN').shareMessage);
+  pickLanguage(view, 'en');
+  assert.equal(view.$('#share-message').value, settingsModule.DEFAULT_SHARE_MESSAGE, 'a reset message follows the language again');
+  view.choose('prompt');
+  assert.equal(view.$('#share-message').value, settingsModule.DEFAULT_PROMPT_MESSAGE);
 });

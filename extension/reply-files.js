@@ -1,6 +1,14 @@
 (() => {
   'use strict';
   if (globalThis.AISplitReplyFiles) return;
+  const { t } = globalThis.AISplitI18n;
+  // download-capture.js runs in the page's own world, without the translations, and reports in English.
+  const captureError = message => ({
+    'The file exceeds 20 MB.': t('The file exceeds 20 MB.'),
+    'The download expired or was refused.': t('The download expired or was refused.'),
+    'The site returned a page instead of the file.': t('The site returned a page instead of the file.'),
+    'The download could not be read.': t('The download could not be read.'),
+  })[message] ?? message;
   const MAX_FILES = 10;
   const MAX_BYTES = 32 * 1024 * 1024;
   const cleanName = value => String(value || 'generated-file').split(/[\\/]/).at(-1).replace(/[\x00-\x1f]/g, '').trim().slice(0, 255) || 'generated-file';
@@ -111,7 +119,7 @@
     return files;
   }
 
-  async function waitFor(find, message = 'The document export controls did not open.') {
+  async function waitFor(find, message = t('The document export controls did not open.')) {
     const end = Date.now() + 8000;
     do {
       const found = find();
@@ -150,10 +158,10 @@
         if (previous?.isConnected) previous.click();
         else if (!before.length) [...current.toolbar.querySelectorAll('button')].find(node => label(node) === 'Close')?.click();
       };
-      viewer = await waitFor(() => selected() && markdownViewer(title), 'The selected Markdown file did not open in Claude’s viewer.');
+      viewer = await waitFor(() => selected() && markdownViewer(title), t('The selected Markdown file did not open in Claude’s viewer.'));
     }
     const more = [...viewer.toolbar.querySelectorAll('button, [role="button"]')].find(node => label(node) === 'More options');
-    if (!more || more.disabled || more.getAttribute('aria-disabled') === 'true') throw new Error('The Markdown viewer has no available More options control.');
+    if (!more || more.disabled || more.getAttribute('aria-disabled') === 'true') throw new Error(t('The Markdown viewer has no available More options control.'));
     const menuBefore = [...document.querySelectorAll('[role="menu"]')].filter(visible);
     const ownMenu = () => {
       const id = more.getAttribute('aria-controls');
@@ -163,16 +171,16 @@
       return opened.length === 1 ? opened[0] : null;
     };
     if (!ownMenu()) {
-      if (menuBefore.length) throw new Error('Close the open menu before sharing this Markdown file.');
+      if (menuBefore.length) throw new Error(t('Close the open menu before sharing this Markdown file.'));
       more.click();
       cleanup.menu = () => { if (more.isConnected && ownMenu() && more.getAttribute('aria-expanded') === 'true') more.click(); };
     }
     return waitFor(() => {
-      if (!selected() || markdownViewer(title)?.pane !== viewer.pane) throw new Error('The selected Markdown viewer changed before download.');
+      if (!selected() || markdownViewer(title)?.pane !== viewer.pane) throw new Error(t('The selected Markdown viewer changed before download.'));
       const menu = ownMenu();
       return menu && [...menu.querySelectorAll('[role="menuitem"], button')].find(node =>
         /^Download as (MD|Markdown)$/i.test(label(node)) && !node.disabled && node.getAttribute('aria-disabled') !== 'true');
-    }, 'Claude did not offer Download as MD for this file.');
+    }, t('Claude did not offer Download as MD for this file.'));
   }
 
   async function expand(scope) {
@@ -191,19 +199,19 @@
   async function currentFile(file) {
     const { source } = file;
     if (!source) {
-      if (!file.element.isConnected) throw new Error('The reply changed. Open Share again.');
+      if (!file.element.isConnected) throw new Error(t('The reply changed. Open Share again.'));
       return file;
     }
     const scope = source.attribute ? [...document.querySelectorAll(`[${source.attribute}]`)]
       .find(node => node.getAttribute(source.attribute) === source.value) : source.element;
-    if (!scope?.isConnected) throw new Error('The reply changed. Open Share again.');
+    if (!scope?.isConnected) throw new Error(t('The reply changed. Open Share again.'));
     await expand(scope);
     const available = list(scope);
     // Reordering equal-name cards must not silently change the selected file.
     const matches = available.filter(item => item.identity === file.identity);
     const current = available.find(item => item.element === file.element)
       || (matches.length === 1 ? matches[0] : !file.identity ? available.find(item => item.key === file.key) : null);
-    if (!current) throw new Error('The file is no longer in this reply. Open Share again.');
+    if (!current) throw new Error(t('The file is no longer in this reply. Open Share again.'));
     return current;
   }
 
@@ -215,7 +223,7 @@
         clearTimeout(timer);
         document.removeEventListener('asb-file-result', receive);
         element.removeAttribute(attr);
-        error ? reject(new Error(error)) : resolve(file);
+        error ? reject(new Error(captureError(error))) : resolve(file);
       };
       const receive = event => {
         let result;
@@ -223,7 +231,7 @@
         if (result.id !== id) return;
         finish(result.error, result.file);
       };
-      const timer = setTimeout(() => finish('The file download could not be read. Refresh this AI tab after updating the extension.'), 35_000);
+      const timer = setTimeout(() => finish(t('The file download could not be read. Refresh this AI tab after updating the extension.')), 35_000);
       document.addEventListener('asb-file-result', receive);
       element.setAttribute(attr, id);
       document.dispatchEvent(new CustomEvent('asb-file-request', { detail: JSON.stringify({ id, name, matchName }) }));
@@ -231,7 +239,7 @@
   }
 
   async function read(files) {
-    if (!Array.isArray(files) || files.length > MAX_FILES) throw new Error('Share up to 10 generated files at a time. Nothing was sent.');
+    if (!Array.isArray(files) || files.length > MAX_FILES) throw new Error(t('Share up to 10 generated files at a time. Nothing was sent.'));
     const pageKey = () => {
       const url = new URL(location.href);
       url.hash = '';
@@ -245,33 +253,33 @@
       let dialog;
       const cleanup = {};
       try {
-        if (pageKey() !== page) throw new Error('The reply changed. Open Share again.');
+        if (pageKey() !== page) throw new Error(t('The reply changed. Open Share again.'));
         const current = await currentFile(file);
-        if (current.kind === 'unavailable') throw new Error('The file card has no download control.');
+        if (current.kind === 'unavailable') throw new Error(t('The file card has no download control.'));
         let download = current.element;
         if (current.kind === 'claude-doc') {
-          if (dialogs().length) throw new Error('Close the open dialog before sharing a document.');
+          if (dialogs().length) throw new Error(t('Close the open dialog before sharing a document.'));
           current.element.click();
           const title = label(current.element).replace(/^Share /, '');
           dialog = await waitFor(() => dialogs().find(node => node.getAttribute('aria-label') === title
             || node.querySelector('h1, h2, [role="heading"]')?.textContent.trim() === title));
           const exportTab = [...dialog.querySelectorAll('[role="radio"], button')].find(node => label(node) === 'Export');
-          if (!exportTab) throw new Error('Could not find the document Export tab.');
+          if (!exportTab) throw new Error(t('Could not find the document Export tab.'));
           exportTab.click();
           download = await waitFor(() => [...dialog.querySelectorAll('button')].find(node => /^Word\b/.test(label(node)) && /\.docx/.test(label(node))));
         }
         if (current.kind === 'claude-markdown') download = await markdownDownload(current, cleanup);
-        if (pageKey() !== page) throw new Error('The reply changed. Open Share again.');
+        if (pageKey() !== page) throw new Error(t('The reply changed. Open Share again.'));
         await currentFile(file);
         const copy = await capture(download, file.name, file.matchName);
-        if (pageKey() !== page) throw new Error('The reply changed while its file was being read.');
+        if (pageKey() !== page) throw new Error(t('The reply changed while its file was being read.'));
         await currentFile(file);
-        if (!copy || typeof copy.data !== 'string') throw new Error('The file contents were unavailable.');
+        if (!copy || typeof copy.data !== 'string') throw new Error(t('The file contents were unavailable.'));
         total += copy.data.length / 4 * 3 - (copy.data.endsWith('==') ? 2 : copy.data.endsWith('=') ? 1 : 0);
-        if (total > MAX_BYTES) throw new Error('Generated files exceed the 32 MB total limit.');
+        if (total > MAX_BYTES) throw new Error(t('Generated files exceed the 32 MB total limit.'));
         copies.push(copy);
       } catch (error) {
-        throw new Error(`Nothing was sent. ${file.name}: ${error.message} Download and attach this file manually, or uncheck generated files to share text only.`);
+        throw new Error(t('Nothing was sent. {file}: {error} Download and attach this file manually, or uncheck generated files to share text only.', { file: file.name, error: error.message }));
       } finally {
         if (pageKey() === page) {
           cleanup.menu?.();

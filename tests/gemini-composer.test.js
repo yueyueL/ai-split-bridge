@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { JSDOM } from 'jsdom';
+import { translations } from './translations.js';
 
 const adapter = await readFile(new URL('../extension/adapters.js', import.meta.url), 'utf8');
 const quill = await readFile(new URL('./fixtures/gemini-quill-composer.html', import.meta.url), 'utf8');
@@ -44,6 +45,7 @@ function setup(t, html) {
   lexicalEditor?.addEventListener('beforeinput', event => {
     if (event.inputType === 'deleteContentBackward' && !window.getSelection().isCollapsed) lexicalEditor.replaceChildren();
   });
+  window.eval(translations);
   window.eval(adapter);
   const clicks = [];
   doc.addEventListener('click', event => clicks.push(event.target));

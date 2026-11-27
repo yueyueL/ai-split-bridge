@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { JSDOM } from 'jsdom';
+import { translations } from './translations.js';
 
 const replySource = await readFile(new URL('../extension/reply-files.js', import.meta.url), 'utf8');
 const captureSource = await readFile(new URL('../extension/download-capture.js', import.meta.url), 'utf8');
@@ -25,6 +26,7 @@ function setup(body, { capture = false } = {}) {
   window.HTMLAnchorElement.prototype.click = () => { nativeClicks++; };
   const originalClick = window.HTMLAnchorElement.prototype.click;
   const originalURL = window.URL.createObjectURL;
+  window.eval(translations);
   if (capture) window.eval(captureSource);
   window.eval(replySource);
   return { dom, window, document, scope, api: window.AISplitReplyFiles, originalClick, originalURL, nativeClicks: () => nativeClicks };
@@ -123,4 +125,25 @@ test('unrelated downloads pass through while a marked Markdown download is captu
   const [file] = await f.api.read(f.api.list(f.scope));
   assert.equal(Buffer.from(file.data, 'base64').toString(), '# Chosen');
   assert.equal(f.nativeClicks(), 1);
+});
+
+// ---------- Interface language ----------
+test('a file that cannot be shared is explained in Chinese when it is chosen', async t => {
+  const f = setup(card('notes') + card('notes'));
+  t.after(() => f.dom.window.close());
+  f.window.AISplitI18n.use('zh-CN');
+  const selected = f.api.list(f.scope);
+  f.scope.innerHTML = card('notes') + card('notes');
+  await assert.rejects(f.api.read(selected), { message: '没有发送任何内容。notes.md：这个文件已不在这条回复中。请重新打开“分享”。请手动下载并附加这个文件，或取消勾选生成的文件，只分享文字。' });
+});
+
+test('a download failure reported by the page is translated before it is shown', async t => {
+  const f = setup(card('notes'));
+  t.after(() => f.dom.window.close());
+  f.window.AISplitI18n.use('zh-CN');
+  f.document.addEventListener('asb-file-request', e => {
+    const { id } = JSON.parse(e.detail);
+    f.document.dispatchEvent(new f.window.CustomEvent('asb-file-result', { detail: JSON.stringify({ id, error: 'The file exceeds 20 MB.' }) }));
+  });
+  await assert.rejects(f.api.read(f.api.list(f.scope)), { message: '没有发送任何内容。notes.md：文件超过 20 MB。请手动下载并附加这个文件，或取消勾选生成的文件，只分享文字。' });
 });

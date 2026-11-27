@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { JSDOM } from 'jsdom';
+import { translations } from './translations.js';
 
 const source = await readFile(new URL('../extension/adapters.js', import.meta.url), 'utf8');
 const pdfs = ['first.pdf', 'second.pdf'].map((name, index) => ({
@@ -61,6 +62,7 @@ function setup(t, angular = false) {
     }
     event.preventDefault();
   });
+  win.eval(translations);
   win.eval(source);
   return { adapter: win.AISplitAdapters, doc, editor, list, received, tile, sends: () => sends, pickerChanges: () => pickerChanges,
     paste(files) {
@@ -162,6 +164,7 @@ test('Gemini generated files use their own download controls, including a button
     '<section data-test-id="generated-file-chip"><div data-test-id="file-name">rubric.pdf</div><button data-test-id="download-button">下载</button><button data-test-id="open-button">打开</button></section>',
     '<a href="https://example.com/citation.pdf">Source</a>',
   ].join('');
+  window.eval(translations);
   window.eval(await readFile(new URL('../extension/reply-files.js', import.meta.url), 'utf8'));
   window.eval(await readFile(new URL('../extension/download-capture.js', import.meta.url), 'utf8'));
   window.fetch = async () => new Response('synthetic test download', { headers: { 'content-type': 'application/octet-stream' } });

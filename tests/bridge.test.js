@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { createBridge, validateText } from '../extension/bridge.js';
 import { createTabManager } from '../extension/tabs.js';
 import { mockChrome, chatTabs, deferred } from './mock-chrome.js';
+import '../extension/i18n-zh-CN.js';
 
 function setup({ splitApi = true } = {}) {
   const model = mockChrome([
@@ -345,4 +346,41 @@ test('invalid or oversized text is rejected without touching any composer', asyn
     assert.equal(model.messages().length, 0);
   }
   assert.doesNotThrow(() => validateText('x'.repeat(60000)));
+});
+
+// ---------- Interface language ----------
+function chinese(t) {
+  globalThis.AISplitI18n.use('zh-CN');
+  t.after(() => globalThis.AISplitI18n.use('en'));
+}
+
+test('results are reported in Chinese when it is chosen', async t => {
+  chinese(t);
+  const { bridge } = setup();
+  assert.equal((await bridge.send(1, [2, 3])).message, '已发送到 ChatGPT、Claude 和 Gemini。');
+  assert.equal((await bridge.send(2, [4])).message, '已发送到 Claude 和 Grok。');
+  assert.equal((await bridge.share(1, { targetId: 2 }, 'Please review this answer.')).message, '草稿已添加到 Claude。请检查后在那里发送。');
+  assert.equal((await bridge.show(1, { targetId: 4 })).message, 'Grok 现在在右侧。之前的聊天仍在它自己的标签页中。');
+});
+
+test('refusals name the affected chat and say that nothing was sent, in Chinese', async t => {
+  chinese(t);
+  const { model, bridge } = setup();
+  await assert.rejects(bridge.send(1, []), { message: '请至少选择一个其他聊天。' });
+  assert.throws(() => validateText('  '), { message: '请先在聊天输入框里写一条消息。' });
+  const respond = model.respond;
+  model.respond = (id, message) => id === 3 && message.type === 'ASB_STAGE' ? { ok: false, error: '输入框已变化。' } : respond(id, message);
+  await assert.rejects(bridge.send(1, [2, 3]), { message: '没有发送任何内容。Gemini：输入框已变化。' });
+  model.respond = (id, message) => id === 2 && message.type === 'ASB_COMMIT' ? { ok: false, error: '发送按钮未就绪。' } : respond(id, message);
+  const partial = await bridge.send(1, [2]);
+  assert.equal(partial.partial, true);
+  assert.equal(partial.message, '已发送到 ChatGPT。Claude：发送按钮未就绪。无法确认是否送达；再次发送前请先检查这个聊天。');
+});
+
+test('a shared reply opened on the other side is reported with its side in Chinese', async t => {
+  chinese(t);
+  const { model, bridge } = setup({ splitApi: false });
+  model.respond = (_id, message) => message.type === 'ASB_CAN_LEAVE' ? { ok: true, page: 111 } : { ok: true };
+  const result = await bridge.share(1, { targetId: 3 }, 'Please review this answer.', { send: true });
+  assert.equal(result.message, '已发送到 Gemini，它现在在右侧。');
 });

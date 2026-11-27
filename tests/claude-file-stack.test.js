@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { JSDOM } from 'jsdom';
+import { translations } from './translations.js';
 
 const sources = await Promise.all(['download-capture', 'reply-files', 'adapters'].map(name =>
   readFile(new URL(`../extension/${name}.js`, import.meta.url), 'utf8')));
@@ -110,6 +111,7 @@ function setup(t) {
   document.querySelector('#download-all').onclick = () => { downloadAllClicks++; };
   document.addEventListener('asb-file-request', () => captures.push('request'));
   document.addEventListener('asb-file-result', () => captures.push('result'));
+  window.eval(translations);
   sources.forEach(source => window.eval(source));
   return {
     window, document, adapter: window.AISplitAdapters, downloaded, escaped, opened, captures, openViewer,

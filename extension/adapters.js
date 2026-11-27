@@ -1,5 +1,6 @@
 (() => {
   "use strict";
+  const { t } = globalThis.AISplitI18n;
 
   // These selectors are intentionally narrow. A changed site should fail visibly,
   // rather than send a message through an unrelated control.
@@ -129,8 +130,8 @@
   const ours = (node) => node.nodeType === Node.ELEMENT_NODE && node.hasAttribute("data-ai-split-bridge");
 
   function checkedText(text, allowEmpty = false) {
-    if (typeof text !== "string" || (!allowEmpty && !normalize(text))) throw new Error("Type a text prompt first.");
-    if (text.length > MAX_TEXT_LENGTH) throw new Error("This prototype supports up to 60,000 characters per prompt.");
+    if (typeof text !== "string" || (!allowEmpty && !normalize(text))) throw new Error(t("Type a text prompt first."));
+    if (text.length > MAX_TEXT_LENGTH) throw new Error(t("This prototype supports up to 60,000 characters per prompt."));
     return normalize(text);
   }
 
@@ -153,7 +154,7 @@
       const matches = [...root.querySelectorAll(selector)].filter(node => visible(node) &&
         !(provider === "gemini" && selectors === config.editors &&
           node.closest("[aria-hidden='true'], nav, aside, model-response, user-query, [data-turn-content-visibility], [data-ai-split-bridge]")));
-      if (matches.length > 1) throw new Error(`${config.name} has multiple matching chat controls. Open one conversation and try again.`);
+      if (matches.length > 1) throw new Error(t("{name} has multiple matching chat controls. Open one conversation and try again.", { name: config.name }));
       if (matches.length === 1) return matches[0];
     }
     return null;
@@ -161,9 +162,9 @@
 
   function getEditor() {
     const editor = firstMatch(config.editors);
-    if (!editor) throw retryable(`Cannot find ${config.name}'s text composer. Open a conversation and sign in. The site's layout may have changed.`);
+    if (!editor) throw retryable(t("Cannot find {name}'s text composer. Open a conversation and sign in. The site's layout may have changed.", { name: config.name }));
     if (editor.disabled || editor.readOnly || editor.getAttribute("aria-disabled") === "true") {
-      throw new Error(`${config.name}'s composer is unavailable right now.`);
+      throw new Error(t("{name}'s composer is unavailable right now.", { name: config.name }));
     }
     return editor;
   }
@@ -217,7 +218,7 @@
   }
 
   function assertIdle() {
-    if (busy()) throw retryable(`${config.name} is still responding. Wait for it to finish.`);
+    if (busy()) throw retryable(t("{name} is still responding. Wait for it to finish.", { name: config.name }));
   }
 
   // ---------- Attachments ----------
@@ -303,15 +304,15 @@
 
   function assertNoAttachments(editor) {
     if (!attachmentCount(editor)) return;
-    if (provider === "gemini") throw new Error("Gemini already has attachments or selected items in its composer. Send or clear them first.");
-    throw new Error(`${config.name} already has attachments in its composer. Send or remove them first; they have been kept.`);
+    if (provider === "gemini") throw new Error(t("Gemini already has attachments or selected items in its composer. Send or clear them first."));
+    throw new Error(t("{name} already has attachments in its composer. Send or remove them first; they have been kept.", { name: config.name }));
   }
 
   function assertUploadsAccepted(editor) {
     for (const tile of attachmentTiles(editor)) {
       const geminiError = provider === "gemini" && [...tile.querySelectorAll('[role="alert"]')].some(visible);
       if (geminiError || tile.matches('[data-state="failed"], [data-state="error"]') || tile.querySelector('[data-state="failed"], [data-state="error"]')) {
-        throw new Error(`${config.name} rejected an attachment. ${normalize(tile.textContent).slice(0,160)} Check or remove it before trying again.`);
+        throw new Error(t("{name} rejected an attachment. {detail} Check or remove it before trying again.", { name: config.name, detail: normalize(tile.textContent).slice(0,160) }));
       }
     }
   }
@@ -411,7 +412,7 @@
     if (files === undefined && !expected) return [];
     if (!Array.isArray(files) || files.length !== expected || files.length > MAX_FILES
       || !files.every((file) => typeof file?.name === "string" && file.name.length <= 255 && typeof file.data === "string")) {
-      throw new Error("The attachments to copy did not arrive intact. Nothing was sent.");
+      throw new Error(t("The attachments to copy did not arrive intact. Nothing was sent."));
     }
     return files.map(decode);
   }
@@ -431,13 +432,13 @@
         if (!cards.length) break;
         const card = cards[0].parentElement;
         const expand = [...card.querySelectorAll('button')].find(button => normalize(button.textContent) === 'Show in text field');
-        if (!expand || expand.disabled) throw new Error('The pasted text is still loading. Wait until “Show in text field” is available, then try again.');
+        if (!expand || expand.disabled) throw new Error(t('The pasted text is still loading. Wait until “Show in text field” is available, then try again.'));
         expand.click();
-        if (!await until(() => !card.isConnected, 5000)) throw new Error('Could not expand the pasted text. Choose “Show in text field” before sending to both. Nothing was sent.');
+        if (!await until(() => !card.isConnected, 5000)) throw new Error(t('Could not expand the pasted text. Choose “Show in text field” before sending to both. Nothing was sent.'));
         editor = getEditor();
       }
       if (attachmentScope(editor).querySelector("button[aria-label='Remove pasted text attachment']")) {
-        throw new Error('Expand the remaining pasted text using “Show in text field” before sending to both.');
+        throw new Error(t('Expand the remaining pasted text using “Show in text field” before sending to both.'));
       }
     }
     const text = readEditor(editor);
@@ -512,7 +513,7 @@
       return attachmentCount(editor) >= start + files.length;
     }, 30_000);
     if (transaction.input) transaction.input.value = "";
-    if (!arrived) throw new Error(`${config.name} did not show the copied attachments. It may not accept these files.`);
+    if (!arrived) throw new Error(t("{name} did not show the copied attachments. It may not accept these files.", { name: config.name }));
     // A kept draft can subsequently be the source of Send both.
     if (provider === "gemini") tray.splice(0, tray.length, ...files);
   }
@@ -570,7 +571,7 @@
             || !!button.querySelector("[data-mat-icon-name='send'], [fonticon='send']");
         return isSend && visible(button);
       });
-      if (candidates.length > 1) throw new Error("Gemini has multiple Send buttons in this composer. Open one conversation and try again.");
+      if (candidates.length > 1) throw new Error(t("Gemini has multiple Send buttons in this composer. Open one conversation and try again."));
       if (candidates.length) return candidates[0];
       if (root === nativeComposer || root.matches("form, .composer, [data-testid='composer'], [role='dialog']")) break;
     }
@@ -582,11 +583,11 @@
     const button = provider === "gemini" ? geminiSendButton(editor) : firstMatch(config.send, scope) || firstMatch(config.send);
     if (!button) {
       if (waitForRender || allowMissing) return null;
-      throw new Error(`Cannot identify ${config.name}'s Send button. Nothing was sent from this tab.`);
+      throw new Error(t("Cannot identify {name}'s Send button. Nothing was sent from this tab.", { name: config.name }));
     }
     if (button.matches(":disabled") || button.closest("[aria-disabled='true'], [inert]")) {
       if (waitForRender) return null;
-      throw new Error(`${config.name}'s Send button is not ready. Nothing was sent from this tab.`);
+      throw new Error(t("{name}'s Send button is not ready. Nothing was sent from this tab.", { name: config.name }));
     }
     return button;
   }
@@ -603,7 +604,7 @@
   }
 
   function requestId(id) {
-    if (typeof id !== "string" || id.length < 1 || id.length > 160) throw new Error("Invalid collaboration request.");
+    if (typeof id !== "string" || id.length < 1 || id.length > 160) throw new Error(t("Invalid collaboration request."));
     return id;
   }
 
@@ -611,16 +612,16 @@
     prune();
     requestId(id);
     const transaction = transactions.get(id);
-    if (!transaction) throw new Error("This send request expired or was already handled. Check both chats before trying again.");
+    if (!transaction) throw new Error(t("This send request expired or was already handled. Check both chats before trying again."));
     return transaction;
   }
 
   function assertUnchanged(transaction, expected) {
     if (location.href !== transaction.url || !transaction.editor.isConnected || getEditor() !== transaction.editor) {
-      throw new Error("The conversation changed during the request. Nothing further will be sent.");
+      throw new Error(t("The conversation changed during the request. Nothing further will be sent."));
     }
-    if (!matchesDraft(transaction.editor, expected)) throw new Error("A draft changed during the request. Your edits have been kept; nothing further will be sent.");
-    if (transaction.attachmentsEdited) throw new Error('Attachments changed during the request. Your edits have been kept; nothing further will be sent.');
+    if (!matchesDraft(transaction.editor, expected)) throw new Error(t("A draft changed during the request. Your edits have been kept; nothing further will be sent."));
+    if (transaction.attachmentsEdited) throw new Error(t('Attachments changed during the request. Your edits have been kept; nothing further will be sent.'));
     assertIdle();
     // Once copies are being attached, the tiles are this request's own.
     if (!transaction.source && !transaction.removersBefore) assertNoAttachments(transaction.editor);
@@ -659,21 +660,21 @@
         } finally {
           editor.removeEventListener("input", onInput);
         }
-        if (!inserted) throw new Error(`Could not safely edit ${config.name}'s composer. Check its draft before continuing.`);
+        if (!inserted) throw new Error(t("Could not safely edit {name}'s composer. Check its draft before continuing.", { name: config.name }));
         if (!inputFired) editor.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: text }));
       }
     }
     // Give controlled editors a chance to render their authoritative state.
     await wait(100);
     if (!editor.isConnected || getEditor() !== editor || !matchesDraft(editor, normalize(text))) {
-      throw new Error(`Could not verify the draft in ${config.name}. Check its composer; nothing was sent from this tab.`);
+      throw new Error(t("Could not verify the draft in {name}. Check its composer; nothing was sent from this tab.", { name: config.name }));
     }
   }
 
   // After a pane navigates, the outgoing page can still answer briefly; it must not take the message.
   function assertExpectedPage(expected, notPage) {
     if ((expected && expected !== provider) || (notPage !== undefined && notPage === performance.timeOrigin)) {
-      throw retryable(`${config.name} is still opening.`);
+      throw retryable(t("{name} is still opening.", { name: config.name }));
     }
   }
 
@@ -684,7 +685,7 @@
     if (provider !== "gemini" || request.provider || firstMatch(config.editors)) return action(request);
     const page = location.href;
     return until(() => location.href !== page || firstMatch(config.editors), 4000).then(() => {
-      if (location.href !== page) throw new Error("The conversation changed while the Gemini composer was opening. Try again in the intended chat.");
+      if (location.href !== page) throw new Error(t("The conversation changed while the Gemini composer was opening. Try again in the intended chat."));
       return action(request);
     });
   }
@@ -693,26 +694,26 @@
     const originalTurn = answer && checkedAnswerElement(answer);
     if (review !== undefined) {
       if (!answer || source || attachments || !Number.isSafeInteger(review?.peerId) || review.peerId < 0) {
-        throw new Error("Invalid cross-review request.");
+        throw new Error(t("Invalid cross-review request."));
       }
       requestId(review.reviewId);
       if (lastReview?.sent && lastReview.answer.url === location.href && lastReview.answer.text === answer.text &&
           sameReviewSource(lastReview, originalTurn)) {
-        throw new Error(`A cross-review was already sent to ${config.name} for this answer. Check the chat before starting another.`);
+        throw new Error(t("A cross-review was already sent to {name} for this answer. Check the chat before starting another.", { name: config.name }));
       }
     }
     prune();
     requestId(id);
-    if (transactions.has(id) || finished.has(id)) throw new Error("This request was already handled. Check both chats before trying again.");
-    if (transactions.size) throw new Error("Another collaboration request is in progress. Wait for it to finish.");
-    if (!Number.isInteger(attachments) || attachments < 0 || attachments > MAX_FILES) throw new Error("Invalid collaboration request.");
+    if (transactions.has(id) || finished.has(id)) throw new Error(t("This request was already handled. Check both chats before trying again."));
+    if (transactions.size) throw new Error(t("Another collaboration request is in progress. Wait for it to finish."));
+    if (!Number.isInteger(attachments) || attachments < 0 || attachments > MAX_FILES) throw new Error(t("Invalid collaboration request."));
     const editor = getEditor();
     assertIdle();
     const attached = source ? attachmentCount(editor) : attachments;
     text = checkedText(text, attached > 0);
     const original = readEditor(editor);
-    if (source && original !== text) throw new Error("Your prompt changed. Review it and click Send to both again.");
-    if (!source && !blankEditor(editor)) throw new Error(`${config.name} already has a draft. Send or clear it first; your draft has been kept.`);
+    if (source && original !== text) throw new Error(t("Your prompt changed. Review it and click Send to both again."));
+    if (!source && !blankEditor(editor)) throw new Error(t("{name} already has a draft. Send or clear it first; your draft has been kept.", { name: config.name }));
     if (!source) assertNoAttachments(editor);
     // Send stays disabled while the site uploads attachments; validation waits for it.
     // Gemini renders Send asynchronously for locally typed text as well as for staged copies.
@@ -723,7 +724,7 @@
 
   async function stage({ requestId: id, text, source = false, files }) {
     const transaction = transactionFor(id);
-    if (transaction.state !== "prepared" || checkedText(text, true) !== transaction.text || source !== transaction.source) throw new Error("This request no longer matches the prepared draft.");
+    if (transaction.state !== "prepared" || checkedText(text, true) !== transaction.text || source !== transaction.source) throw new Error(t("This request no longer matches the prepared draft."));
     const copies = source ? [] : checkedFiles(files, transaction.attachments);
     assertUnchanged(transaction, transaction.original);
     // Mark before editing so cancellation can safely remove a verified staged draft
@@ -741,12 +742,12 @@
   }
 
   function ready(transaction, options) {
-    if (transaction.state !== "staged") throw new Error("The draft has not been staged.");
+    if (transaction.state !== "staged") throw new Error(t("The draft has not been staged."));
     assertUnchanged(transaction, transaction.text);
     assertUploadsAccepted(transaction.editor);
-    if (uploadsPending(transaction.editor)) throw new Error(`${config.name} is still processing the attachments. Wait for them to finish.`);
+    if (uploadsPending(transaction.editor)) throw new Error(t("{name} is still processing the attachments. Wait for them to finish.", { name: config.name }));
     const expected = transaction.source ? transaction.sourceAttachments : transaction.attachments;
-    if (attachmentCount(transaction.editor) !== expected) throw new Error(`${config.name}'s attachments changed or an upload failed. Check its composer; nothing further was sent.`);
+    if (attachmentCount(transaction.editor) !== expected) throw new Error(t("{name}'s attachments changed or an upload failed. Check its composer; nothing further was sent.", { name: config.name }));
     // Reading back a text-only draft is sufficient when the user chose to send it manually.
     if (transaction.draftOnly && !expected) return null;
     return sendButton(transaction.editor, options);
@@ -779,7 +780,7 @@
 
   function commit({ requestId: id }) {
     const transaction = transactionFor(id);
-    if (transaction.draftOnly) throw new Error("This request is for an editable draft. Send it from the chat when ready.");
+    if (transaction.draftOnly) throw new Error(t("This request is for an editable draft. Send it from the chat when ready."));
     if (transaction.answer) checkCompareAnswer(transaction.answer);
     const button = ready(transaction, { allowMissing: transaction.allowMissingSend });
     // A click can synchronously navigate or throw after reaching a page handler.
@@ -824,11 +825,11 @@
 
   async function insert({ text }) {
     prune();
-    if (transactions.size) throw new Error("Another collaboration request is in progress.");
+    if (transactions.size) throw new Error(t("Another collaboration request is in progress."));
     text = checkedText(text);
     const editor = getEditor();
     assertIdle();
-    if (!blankEditor(editor)) throw new Error(`${config.name} already has a draft. Send or clear it first; your draft has been kept.`);
+    if (!blankEditor(editor)) throw new Error(t("{name} already has a draft. Send or clear it first; your draft has been kept.", { name: config.name }));
     assertNoAttachments(editor);
     await writeEditor(editor, text);
     return { ok: true };
@@ -938,8 +939,8 @@
   function assertGeminiReplyFinished(element) {
     if (provider !== "gemini") return;
     const status = element.closest("[data-test-id='model-response']")?.getAttribute("data-turn-status");
-    if (status === "failed") throw new Error("Gemini could not finish this answer. Choose another reply.");
-    if (status && status !== "settled") throw new Error("Gemini is still responding. Wait for it to finish.");
+    if (status === "failed") throw new Error(t("Gemini could not finish this answer. Choose another reply."));
+    if (status && status !== "settled") throw new Error(t("Gemini is still responding. Wait for it to finish."));
   }
 
   function selectedWithin(element) {
@@ -963,7 +964,7 @@
     if (!followedByNewer(element)) assertIdle();
     const files = globalThis.AISplitReplyFiles?.list(element) || [];
     const text = replyBody(element);
-    if (!text && !files.length) throw new Error(`This ${config.name} reply has no text or files to share. Select the text you want, then try again.`);
+    if (!text && !files.length) throw new Error(t("This {name} reply has no text or files to share. Select the text you want, then try again.", { name: config.name }));
     return { ok: true, text: checkedText(text, files.length > 0), partial: false, ...(files.length ? { files } : {}) };
   }
 
@@ -972,7 +973,7 @@
     if (!options.whole && selectedWithin(element)) return replyText(element);
     if (!followedByNewer(element)) assertIdle();
     await globalThis.AISplitReplyFiles?.expand(replyScope(element));
-    if (!element.isConnected) throw new Error("This reply changed while reading it. Select it again.");
+    if (!element.isConnected) throw new Error(t("This reply changed while reading it. Select it again."));
     return replyText(element, options);
   }
 
@@ -993,15 +994,15 @@
   function completedAnswer(latest, raw) {
     assertIdle();
     if (latest?.role !== "assistant") {
-      throw new Error(`Wait for an answer to the latest prompt in ${config.name}, then open Compare again.`);
+      throw new Error(t("Wait for an answer to the latest prompt in {name}, then open Compare again.", { name: config.name }));
     }
     const element = latest.element;
     assertGeminiReplyFinished(element);
     const streaming = "[data-is-streaming='true'], [data-is-loading='true'], [aria-busy='true']";
-    if (element.closest(streaming) || element.querySelector(streaming)) throw new Error(`${config.name} is still responding. Wait for it to finish.`);
+    if (element.closest(streaming) || element.querySelector(streaming)) throw new Error(t("{name} is still responding. Wait for it to finish.", { name: config.name }));
     const text = replyBody(element, raw);
-    if (!text) throw new Error(`${config.name}'s latest answer has no text to compare.`);
-    if (text.length > MAX_TEXT_LENGTH) throw new Error(`${config.name}'s latest answer exceeds the 60,000-character comparison limit.`);
+    if (!text) throw new Error(t("{name}'s latest answer has no text to compare.", { name: config.name }));
+    if (text.length > MAX_TEXT_LENGTH) throw new Error(t("{name}'s latest answer exceeds the 60,000-character comparison limit.", { name: config.name }));
     let identity = compareTurns.get(element);
     if (identity?.url !== location.href || identity.text !== text) {
       identity = { turn: crypto.randomUUID(), url: location.href, text };
@@ -1103,13 +1104,13 @@
     if (!latest) return unavailable;
     const originalStillLatest = latest.role === "assistant" && sameReviewSource(record, latest.element);
     if (originalStillLatest && replyBody(latest.element, raw) === record.answer.text) {
-      if (record.sent) return { ...unavailable, pending: true, message: `Waiting for ${config.name} to answer the cross-review request.` };
+      if (record.sent) return { ...unavailable, pending: true, message: t("Waiting for {name} to answer the cross-review request.", { name: config.name }) };
       const editor = firstMatch(config.editors);
       return editor && matchesReviewRequest(record, oneLine(readEditor(editor)))
-        ? { ...unavailable, pending: true, message: `Send the cross-review draft in ${config.name} to get its critique.` } : unavailable;
+        ? { ...unavailable, pending: true, message: t("Send the cross-review draft in {name} to get its critique.", { name: config.name }) } : unavailable;
     }
     if (!bindReviewPrompt(record, turns, raw)) return unavailable;
-    if (latest.role === "user") return { ...unavailable, pending: true, message: `Waiting for ${config.name}'s critique.` };
+    if (latest.role === "user") return { ...unavailable, pending: true, message: t("Waiting for {name}'s critique.", { name: config.name }) };
     let answer;
     try { answer = completedAnswer(latest, raw); }
     catch (error) { return { ...unavailable, pending: true, message: error.message }; }
@@ -1125,7 +1126,7 @@
   function checkedAnswerElement(snapshot) {
     const { answer: current, element } = currentAnswer();
     if (snapshot.turn !== current.turn || snapshot.url !== current.url || snapshot.text !== current.text) {
-      throw new Error(`The answer in ${config.name} changed. Open Compare again to use the current answers.`);
+      throw new Error(t("The answer in {name} changed. Open Compare again to use the current answers.", { name: config.name }));
     }
     return element;
   }
@@ -1136,11 +1137,11 @@
 
   function getResponse() {
     const latest = latestReply();
-    if (!latest) throw new Error(`Could not find a reply from ${config.name}. Select the reply text on the page, then try again.`);
+    if (!latest) throw new Error(t("Could not find a reply from {name}. Select the reply text on the page, then try again.", { name: config.name }));
     // While the newest reply is still being written, an older one must not be passed off as the latest.
     if (!selectedWithin(latest) && followedByNewer(latest)) {
       assertIdle();
-      if (provider === "gemini") throw new Error("Wait for Gemini to answer the latest prompt, or choose an earlier reply to share.");
+      if (provider === "gemini") throw new Error(t("Wait for Gemini to answer the latest prompt, or choose an earlier reply to share."));
     }
     return replyText(latest);
   }
@@ -1333,26 +1334,26 @@
 
   async function readMessage(element) {
     const entry = messages().find(message => message.element === element);
-    if (!entry) throw new Error("This message is no longer on the page. Select it again.");
+    if (!entry) throw new Error(t("This message is no longer on the page. Select it again."));
     if (entry.role === "assistant") return readReply(element);
     const selected = selectedWithin(element);
     return { ok: true, text: checkedText(selected || entry.text), partial: !!selected, prompt: true };
   }
 
   async function readMessages(elements) {
-    if (!Array.isArray(elements) || !elements.length) throw new Error("Select at least one message to share.");
+    if (!Array.isArray(elements) || !elements.length) throw new Error(t("Select at least one message to share."));
     const wanted = new Set(elements), available = messages();
     const selected = available.filter(entry => wanted.has(entry.element));
-    if (selected.length !== wanted.size) throw new Error("Some selected messages are no longer on the page. Select them again.");
+    if (selected.length !== wanted.size) throw new Error(t("Some selected messages are no longer on the page. Select them again."));
     const url = location.href, parts = [], files = [];
     for (const entry of selected) {
       // Checkbox selection always means the whole message, regardless of highlighted text.
       const result = entry.role === "assistant" ? await readReply(entry.element, { whole: true })
         : { text: promptText(entry.element) };
       if (location.href !== url || !selected.every(item => item.element.isConnected)) {
-        throw new Error("The conversation changed while reading it. Select the messages again.");
+        throw new Error(t("The conversation changed while reading it. Select the messages again."));
       }
-      parts.push(`${entry.role === "user" ? "You" : config.name}:\n${result.text || "[Generated files attached]"}`);
+      parts.push(`${t("{speaker}:", { speaker: entry.role === "user" ? t("You") : config.name })}\n${result.text || t("[Generated files attached]")}`);
       files.push(...(result.files || []));
     }
     return { ok: true, text: checkedText(parts.join("\n\n---\n\n")), files, partial: false, conversation: true };
@@ -1375,15 +1376,15 @@
     // Sign-in and landing pages have no composer; they must not trap the pane.
     const editor = firstMatch(config.editors);
     if (editor) {
-      if (!blankEditor(editor)) throw new Error(`Send or clear ${config.name}'s draft before switching. The draft has been kept.`);
-      if (attachmentCount(editor)) throw new Error(`Send or remove ${config.name}'s attachments before switching. They have been kept.`);
+      if (!blankEditor(editor)) throw new Error(t("Send or clear {name}'s draft before switching. The draft has been kept.", { name: config.name }));
+      if (attachmentCount(editor)) throw new Error(t("Send or remove {name}'s attachments before switching. They have been kept.", { name: config.name }));
     } else if ([...document.querySelectorAll("textarea, [contenteditable='true']")].some((node) => visible(node) && readEditor(node))) {
-      throw new Error(`This page has unsent text that ${config.name}'s adapter does not recognize. Clear it before switching.`);
+      throw new Error(t("This page has unsent text that {name}'s adapter does not recognize. Clear it before switching.", { name: config.name }));
     }
     const persistent = { chatgpt: /\/c\/[^/]+/, claude: /\/chat\/[^/]+/, gemini: /\/(?:app\/[^/]+|gem\/[^/]+\/[^/]+)\/?$/, grok: /\/c\/[^/]+/ }[provider].test(location.pathname);
     const hasReply = config.responses.some((selector) => [...document.querySelectorAll(selector)].some(visible));
     if ((hasReply && !persistent) || new URL(location.href).searchParams.get("temporary-chat") === "true") {
-      throw new Error(`${config.name}'s chat has no saved conversation link. Open a saved conversation before switching so you can return to it.`);
+      throw new Error(t("{name}'s chat has no saved conversation link. Open a saved conversation before switching so you can return to it.", { name: config.name }));
     }
     return { ok: true, page: performance.timeOrigin };
   }
