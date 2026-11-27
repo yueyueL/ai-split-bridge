@@ -478,3 +478,176 @@ test('a later request with nothing saved is answered in English again', async t 
   const shared = await request({ type: 'ASB_SHARE', targetId: 2, reply: 'Review this.' });
   assert.deepEqual([shared.ok, shared.message], [true, 'Sent to Claude.']);
 });
+
+// ---------- Opening an assistant from the popup's Split View form ----------
+const popupSender = { id: 'test-extension', url: 'chrome-extension://test-extension/popup.html' };
+const urls = model => model.order().map(id => model.data.get(id).url);
+
+test('Create split opens an assistant that is not open yet beside the chosen chat', async t => {
+  const { model, request } = await load(t, [{ id: 1, url: 'https://chatgpt.com/c/one' }, { id: 2 }]);
+  const result = await request({ type: 'ASB_PAIR', leftId: 1, rightProvider: 'gemini' }, popupSender);
+  assert.deepEqual([result.ok, result.message], [true, 'Split View ready.']);
+  assert.deepEqual(urls(model), ['https://chatgpt.com/c/one', 'https://gemini.google.com/app', 'https://example.com/']);
+  const opened = model.data.get(3);
+  assert.ok(opened.splitViewId >= 0);
+  assert.equal(opened.splitViewId, model.data.get(1).splitViewId);
+  assert.equal(model.data.get(1).active, true);
+  assert.equal(model.calls.find(call => call.method === 'create').args[0].active, false, 'the new chat opens in the background');
+});
+
+test('a new chat chosen for the left joins the open chat without moving it', async t => {
+  const { model, request } = await load(t, [{ id: 2 }, { id: 1, url: 'https://claude.ai/chat/two' }, { id: 3 }]);
+  const result = await request({ type: 'ASB_PAIR', leftProvider: 'gemini', rightId: 1 }, popupSender);
+  assert.equal(result.ok, true, result.error);
+  assert.deepEqual(model.order(), [2, 4, 1, 3]);
+  assert.equal(model.data.get(4).splitViewId, model.data.get(1).splitViewId);
+  assert.deepEqual(model.calls.filter(call => call.method === 'move').map(call => call.args[0]), [4], 'only the new tab is moved');
+  assert.equal(model.data.get(4).active, true);
+});
+
+test('two new chats can be opened side by side when no AI chat is open', async t => {
+  const { model, request } = await load(t, [{ id: 1 }]);
+  const list = await request({ type: 'ASB_LIST' }, popupSender);
+  assert.deepEqual([list.tabs, list.canManageSplit], [[], true]);
+  const result = await request({ type: 'ASB_PAIR', leftProvider: 'claude', rightProvider: 'gemini' }, popupSender);
+  assert.equal(result.ok, true, result.error);
+  assert.deepEqual(urls(model), ['https://example.com/', 'https://claude.ai/new', 'https://gemini.google.com/app']);
+  assert.ok(model.data.get(2).splitViewId >= 0);
+  assert.equal(model.data.get(2).splitViewId, model.data.get(3).splitViewId);
+});
+
+test('a new chat takes the pinned state and tab group of the chat it joins', async t => {
+  for (const state of [{ groupId: 7 }, { pinned: true }]) {
+    const { model, request } = await load(t, [{ id: 1, url: 'https://chatgpt.com/c/one', ...state }, { id: 2 }]);
+    const result = await request({ type: 'ASB_PAIR', leftId: 1, rightProvider: 'grok' }, popupSender);
+    assert.equal(result.ok, true, result.error);
+    const opened = model.data.get(3);
+    assert.deepEqual([opened.groupId, opened.pinned], [state.groupId ?? -1, state.pinned ?? false]);
+    assert.equal(opened.splitViewId, model.data.get(1).splitViewId);
+  }
+});
+
+test('the split is made only after the new chat has finished loading', async t => {
+  const { model, request } = await load(t, [{ id: 1, url: 'https://chatgpt.com/c/one' }]);
+  let reads = 0;
+  model.before = (method, args) => {
+    if (method === 'createSplit') assert.equal(model.data.get(2).pendingUrl, undefined, 'the split waits for the page');
+    if (method !== 'get' || args[0] !== 2) return;
+    const tab = model.data.get(2);
+    if (++reads === 1) { tab.url = ''; tab.pendingUrl = 'https://gemini.google.com/app'; }
+    else { tab.url = 'https://gemini.google.com/app'; delete tab.pendingUrl; }
+  };
+  const result = await request({ type: 'ASB_PAIR', leftId: 1, rightProvider: 'gemini' }, popupSender);
+  assert.equal(result.ok, true, result.error);
+  assert.ok(reads >= 2);
+  assert.equal(model.data.get(2).splitViewId, model.data.get(1).splitViewId);
+});
+
+test('a split that cannot be made is refused before any new tab is opened', async t => {
+  const { model, request, sender } = await load(t, [...chatTabs(), { id: 3 }]);
+  const refused = await request({ type: 'ASB_PAIR', leftId: 1, rightProvider: 'gemini' }, popupSender);
+  assert.deepEqual([refused.ok, refused.error], [false, 'Remove the chosen tabs from their existing splits first.']);
+  for (const [message, from] of [
+    [{ leftId: 3, rightProvider: 'gemini' }, popupSender],
+    [{ leftId: 1, rightProvider: 'perplexity' }, popupSender],
+    [{ leftProvider: 'claude', rightProvider: 'constructor' }, popupSender],
+    [{ leftId: 99, rightProvider: 'gemini' }, popupSender],
+    [{ leftProvider: 'claude' }, popupSender],
+    [{ leftProvider: 'claude', rightProvider: 'gemini' }, sender],
+  ]) assert.equal((await request({ type: 'ASB_PAIR', ...message }, from)).ok, false, JSON.stringify(message));
+  assert.equal(model.calls.some(call => call.method === 'create'), false);
+
+  const old = await load(t, [{ id: 1, url: 'https://chatgpt.com/c/one' }], { splitApi: false });
+  const unsupported = await old.request({ type: 'ASB_PAIR', leftId: 1, rightProvider: 'gemini' }, popupSender);
+  assert.match(unsupported.error, /Split View option/);
+  assert.equal(old.model.calls.some(call => call.method === 'create'), false);
+});
+
+// ---------- Remembering the last pair of assistants ----------
+const pairLast = { type: 'ASB_PAIR_LAST' };
+const made = (model, method) => model.calls.filter(call => call.method === method);
+
+test('a split made from the popup is remembered by its two assistants, left and right', async t => {
+  const { model, request } = await load(t, [{ id: 1, url: 'https://chatgpt.com/c/one' }, { id: 2 }]);
+  assert.equal((await request({ type: 'ASB_LIST' }, popupSender)).lastPair, null);
+  const refused = await request({ type: 'ASB_PAIR', leftId: 2, rightProvider: 'gemini' }, popupSender);
+  assert.equal(refused.ok, false);
+  assert.equal(model.synced.lastPair, undefined, 'a refused split is not remembered');
+
+  const result = await request({ type: 'ASB_PAIR', leftProvider: 'gemini', rightId: 1 }, popupSender);
+  assert.equal(result.ok, true, result.error);
+  assert.deepEqual(model.synced.lastPair, { left: 'gemini', right: 'chatgpt' });
+  assert.deepEqual((await request({ type: 'ASB_LIST' }, popupSender)).lastPair, { left: 'gemini', right: 'chatgpt' });
+});
+
+test('the remembered pair reuses open chats that are not in a split, in the remembered order', async t => {
+  const { model, request } = await load(t, [
+    { id: 1 }, { id: 2, url: 'https://gemini.google.com/app/g1' }, { id: 3, url: 'https://claude.ai/chat/c1' },
+  ], { sync: { lastPair: { left: 'claude', right: 'gemini' } } });
+  const result = await request(pairLast, popupSender);
+  assert.deepEqual([result.ok, result.message], [true, 'Split View ready.']);
+  assert.equal(made(model, 'create').length, 0, 'both assistants were already open');
+  assert.deepEqual(model.order(), [1, 3, 2]);
+  assert.ok(model.data.get(3).splitViewId >= 0);
+  assert.equal(model.data.get(3).splitViewId, model.data.get(2).splitViewId);
+  assert.equal(model.data.get(3).active, true);
+});
+
+test('the remembered pair opens whichever assistant is missing, or both', async t => {
+  const one = await load(t, [{ id: 1 }, { id: 2, url: 'https://gemini.google.com/app/g1' }, { id: 4 }], { sync: { lastPair: { left: 'claude', right: 'gemini' } } });
+  assert.equal((await one.request(pairLast, popupSender)).ok, true);
+  assert.deepEqual(made(one.model, 'create').map(call => call.args[0].url), ['https://claude.ai/new']);
+  assert.deepEqual(urls(one.model), ['https://example.com/', 'https://claude.ai/new', 'https://gemini.google.com/app/g1', 'https://example.com/']);
+  assert.deepEqual(made(one.model, 'move').map(call => call.args[0]), [5], 'the open chat keeps its place');
+  assert.equal(one.model.data.get(5).splitViewId, one.model.data.get(2).splitViewId);
+
+  const none = await load(t, [{ id: 1 }], { sync: { lastPair: { left: 'claude', right: 'gemini' } } });
+  assert.equal((await none.request(pairLast, popupSender)).ok, true);
+  assert.deepEqual(urls(none.model), ['https://example.com/', 'https://claude.ai/new', 'https://gemini.google.com/app']);
+  assert.equal(none.model.data.get(2).splitViewId, none.model.data.get(3).splitViewId);
+});
+
+test('the same assistant on both sides uses two different chats', async t => {
+  const { model, request } = await load(t, [{ id: 1, url: 'https://claude.ai/chat/c1' }, { id: 2 }], { sync: { lastPair: { left: 'claude', right: 'claude' } } });
+  assert.equal((await request(pairLast, popupSender)).ok, true);
+  assert.deepEqual(made(model, 'create').map(call => call.args[0].url), ['https://claude.ai/new']);
+  assert.equal(model.data.get(1).splitViewId, model.data.get(3).splitViewId);
+  assert.deepEqual(model.order(), [1, 3, 2]);
+});
+
+test('chats already side by side are left as they are, and chats in other splits are not taken', async t => {
+  for (const lastPair of [{ left: 'chatgpt', right: 'claude' }, { left: 'claude', right: 'chatgpt' }]) {
+    const { model, request } = await load(t, chatTabs(), { sync: { lastPair } });
+    const result = await request(pairLast, popupSender);
+    assert.deepEqual([result.ok, result.message], [true, 'These chats are already side by side.']);
+    assert.equal(model.calls.some(call => ['create', 'move', 'createSplit', 'unsplit'].includes(call.method)), false);
+  }
+  const { model, request } = await load(t, [{ id: 5, active: true }, ...chatTabs().map(tab => ({ ...tab, active: false }))], { sync: { lastPair: { left: 'chatgpt', right: 'claude' } } });
+  assert.equal((await request(pairLast, popupSender)).ok, true);
+  assert.equal(made(model, 'create').length, 2, 'the existing split is not broken up');
+  assert.deepEqual([model.data.get(1).splitViewId, model.data.get(2).splitViewId], [10, 10]);
+});
+
+test('an open chat in another tab group stays there; a new one joins the first chat’s group', async t => {
+  const { model, request } = await load(t, [
+    { id: 1, url: 'https://gemini.google.com/app/g1', groupId: 7 }, { id: 2, url: 'https://claude.ai/chat/c1' },
+  ], { sync: { lastPair: { left: 'gemini', right: 'claude' } } });
+  assert.equal((await request(pairLast, popupSender)).ok, true);
+  assert.deepEqual([model.data.get(2).groupId, model.data.get(2).splitViewId], [-1, -1]);
+  const opened = model.data.get(3);
+  assert.deepEqual([opened.url, opened.groupId], ['https://claude.ai/new', 7]);
+  assert.equal(opened.splitViewId, model.data.get(1).splitViewId);
+});
+
+test('with no usable pair remembered there is nothing to open', async t => {
+  for (const sync of [{}, { lastPair: { left: 'perplexity', right: 'claude' } }, { lastPair: 'claude+gemini' }, { lastPair: { left: 'claude' } }]) {
+    const { model, request, sender } = await load(t, [{ id: 1, url: 'https://chatgpt.com/c/one' }], { sync });
+    assert.equal((await request({ type: 'ASB_LIST' }, popupSender)).lastPair, null);
+    const refused = await request(pairLast, popupSender);
+    assert.deepEqual([refused.ok, refused.error], [false, 'Create a split from this popup once first. It then remembers that pair.']);
+    assert.equal((await request(pairLast, sender)).ok, false, 'a chat page cannot ask for it');
+    assert.equal(made(model, 'create').length, 0);
+  }
+  const chinese = await load(t, [{ id: 1 }], { sync: { language: 'zh-CN' } });
+  assert.equal((await chinese.request(pairLast, popupSender)).error, '请先在这个弹窗里创建一次分屏，之后它会记住那个组合。');
+});

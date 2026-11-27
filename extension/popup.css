@@ -54,6 +54,7 @@ option { color: #0d0d0d; background: #fff; }
 .providers { display: flex; flex-wrap: wrap; gap: 8px; }
 .chip { height: 36px; padding: 0 14px; border: 1px solid var(--line-strong); border-radius: 999px; background: transparent; font-weight: 500; }
 .chip:not(:disabled):hover { background: var(--hover); }
+#pair-last { display: block; margin-bottom: 10px; }
 #status:not(:empty) { margin: 10px 2px 0; color: var(--muted); font-size: 12.5px; }
 #status.error { color: var(--danger); }
 

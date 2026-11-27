@@ -18,13 +18,23 @@ export function createTabManager(api) {
     return tab;
   }
 
-  async function waitForNewTab(id, provider) {
+  async function waitForNewTab(id, provider, stillLoading = t('The new assistant is still loading. Your original split is unchanged. Try again once it loads.')) {
     for (let attempt = 0; attempt < 100; attempt++) {
       const tab = await api.tabs.get(id);
       if (providerFor(tab.url) === provider && (!tab.pendingUrl || tab.pendingUrl === tab.url)) return tab;
       await new Promise(resolve => setTimeout(resolve, 100));
     }
-    throw new Error(t('The new assistant is still loading. Your original split is unchanged. Try again once it loads.'));
+    throw new Error(stillLoading);
+  }
+
+  // Opens an assistant in a background tab. Beside an open chat it takes that chat's window,
+  // pinned state and tab group, which Chrome requires of the two tabs in a split.
+  async function openChat(provider, beside, windowId) {
+    const tab = await api.tabs.create({
+      url: PROVIDERS[provider].url, windowId: beside ? beside.windowId : windowId, active: false, ...(beside && { pinned: beside.pinned }),
+    });
+    if (beside && beside.groupId !== -1) await api.tabs.group({ tabIds: [tab.id], groupId: beside.groupId });
+    return tab;
   }
 
   async function context(id) {
@@ -89,16 +99,36 @@ export function createTabManager(api) {
     return api.tabs.createSplit([leftId, rightId]);
   }
 
-  async function pair(leftId, rightId) {
-    const [left, right] = await Promise.all([supported(leftId), supported(rightId)]);
-    if (left.id === right.id || left.windowId !== right.windowId) throw new Error(t('Choose two different AI tabs in this window.'));
-    if (hasSplit(left) && left.splitViewId === right.splitViewId) return { ok: true, message: t('These chats are already side by side.') };
+  // Each side is the ID of an open chat's tab, or { provider } for an assistant to open first.
+  async function pair(leftChoice, rightChoice, windowId) {
+    const choices = [leftChoice, rightChoice];
+    const isNew = choice => typeof choice !== 'number';
+    if (choices.some(choice => isNew(choice) && !Object.hasOwn(PROVIDERS, choice?.provider))) throw new Error(t('Choose a supported assistant.'));
+    // Everything that could refuse the split is checked before a tab is opened.
+    const open = await Promise.all(choices.map(choice => isNew(choice) ? null : supported(choice)));
+    const chosen = open.filter(Boolean);
+    if (chosen.length === 2) {
+      const [left, right] = chosen;
+      if (left.id === right.id || left.windowId !== right.windowId) throw new Error(t('Choose two different AI tabs in this window.'));
+      if (hasSplit(left) && left.splitViewId === right.splitViewId) return { ok: true, message: t('These chats are already side by side.') };
+    }
     if (!canManageSplit()) throw new Error(t('This Chrome version can’t create splits for extensions. Right-click a chat tab and use Chrome’s Split View option.'));
-    if (hasSplit(left) || hasSplit(right)) throw new Error(t('Remove the chosen tabs from their existing splits first.'));
-    compatible(left, right);
-    await arrange(leftId, rightId);
+    if (chosen.some(hasSplit)) throw new Error(t('Remove the chosen tabs from their existing splits first.'));
+    if (chosen.length === 2) compatible(...chosen);
+
+    const tabs = [];
+    for (const [side, choice] of choices.entries()) tabs.push(open[side] || await openChat(choice.provider, chosen[0], windowId));
+    const [left, right] = await Promise.all(tabs.map((tab, side) => open[side] ? tab
+      : waitForNewTab(tab.id, choices[side].provider, t('The new chat has not finished opening. If it asks you to sign in, do that first, then create the split again.'))));
+    if (!open[0] && open[1]) {
+      // arrange() brings the right tab to the left one. Here the right one is the chat that was
+      // already open, so the new tab goes to it instead and that chat keeps its place.
+      const [opened, kept] = await Promise.all([api.tabs.get(left.id), api.tabs.get(right.id)]);
+      await api.tabs.move(opened.id, { index: opened.index < kept.index ? kept.index - 1 : kept.index });
+    }
+    await arrange(left.id, right.id);
     await remember([left, right]);
-    await api.tabs.update(leftId, { active: true });
+    await api.tabs.update(left.id, { active: true });
     return { ok: true, message: t('Split View ready.') };
   }
 
@@ -144,11 +174,7 @@ export function createTabManager(api) {
       candidates.sort((a, b) => Number(b.id === remembered[provider]) - Number(a.id === remembered[provider]) ||
         (b.lastAccessed || 0) - (a.lastAccessed || 0));
       incoming = candidates[0];
-      if (!incoming) {
-        incoming = await api.tabs.create({ url: PROVIDERS[provider].url, windowId: source.windowId, active: false, pinned: source.pinned });
-        if (source.groupId !== -1) await api.tabs.group({ tabIds: [incoming.id], groupId: source.groupId });
-        incoming = await waitForNewTab(incoming.id, provider);
-      }
+      if (!incoming) incoming = await waitForNewTab((await openChat(provider, source)).id, provider);
     } else if (hasSplit(incoming)) {
       throw new Error(t('That chat is in another split. Remove it from that split first.'));
     }
@@ -186,6 +212,28 @@ export function createTabManager(api) {
     };
   }
 
+  // Pairs two assistants by name. An open chat that is not in a split is used as it is;
+  // an assistant with no such chat is opened.
+  async function pairAssistants(leftProvider, rightProvider, windowId) {
+    if (![leftProvider, rightProvider].every(provider => Object.hasOwn(PROVIDERS, provider))) throw new Error(t('Choose a supported assistant.'));
+    const tabs = await api.tabs.query({ windowId });
+    const active = tabs.find(tab => tab.active);
+    if (active && hasSplit(active)) {
+      const shown = tabs.filter(tab => tab.splitViewId === active.splitViewId).map(tab => providerFor(tab.url)).sort();
+      if (shown.length === 2 && shown.join() === [leftProvider, rightProvider].sort().join()) {
+        return { ok: true, message: t('These chats are already side by side.') };
+      }
+    }
+    // The chat in front comes first, then the one used most recently.
+    const free = tabs.filter(tab => !hasSplit(tab) && !(tab.pendingUrl && tab.pendingUrl !== tab.url))
+      .sort((a, b) => Number(b.active) - Number(a.active) || (b.lastAccessed || 0) - (a.lastAccessed || 0) || a.index - b.index);
+    const left = free.find(tab => providerFor(tab.url) === leftProvider);
+    // Chrome only splits tabs with the same pinned state and tab group, so a chat elsewhere stays where it is.
+    const right = free.find(tab => providerFor(tab.url) === rightProvider && tab.id !== left?.id
+      && (!left || (tab.pinned === left.pinned && tab.groupId === left.groupId)));
+    return pair(left ? left.id : { provider: leftProvider }, right ? right.id : { provider: rightProvider }, windowId);
+  }
+
   // Replaces the chat shown in one pane with another assistant or a specific open chat.
   async function replace(paneId, { provider, tabId } = {}) {
     const state = await context(paneId);
@@ -203,5 +251,5 @@ export function createTabManager(api) {
     return canManageSplit() ? swapIn(state, provider, incoming) : navigatePane(state, provider, incoming);
   }
 
-  return { context, pair, replace, supported, canManageSplit };
+  return { context, pair, pairAssistants, replace, supported, canManageSplit };
 }

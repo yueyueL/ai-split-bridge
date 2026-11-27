@@ -52,7 +52,13 @@ globalThis.AISplitI18n.register('zh-CN', {
   '<b>Send both</b> sits beside each chat’s Send button. <b>Share with…</b> sits beside Copy. Use <b>Select messages…</b> in the composer’s arrow menu to share several messages together.':
     '<b>同时发送</b>在每个聊天的发送按钮旁边。<b>分享到…</b>在复制按钮旁边。要一次分享多条消息，请使用输入框箭头菜单里的<b>选择消息…</b>。',
   'The extension did not respond. Try reopening this popup.': '扩展没有响应。请重新打开此弹窗再试。',
-  'Choose an open chat…': '选择一个已打开的聊天…',
+  'Choose a chat…': '选择一个聊天…',
+  'Open a new chat': '新开一个聊天',
+  'New {name} chat': '新的 {name} 聊天',
+  'Choose a chat for each side.': '请为左右两侧各选择一个聊天。',
+  'Opening the chat and creating the split…': '正在打开聊天并创建分屏…',
+  'Open {left} + {right}': '打开 {left} + {right}',
+  '{left} on the left and {right} on the right, as last time. An open chat is used as it is; a missing one is opened.': '和上次一样，{left} 在左侧、{right} 在右侧。已打开的聊天会直接用，没打开的会新开。',
   'Side by side with {name}': '正与 {name} 并排显示',
   'Choose two chats to put side by side.': '选择两个聊天并排显示。',
   'Right-click an AI chat tab and choose Split View to pair it.': '右键点击 AI 聊天标签页，选择“分屏视图”来配对。',
@@ -254,6 +260,7 @@ globalThis.AISplitI18n.register('zh-CN', {
   'Unknown assistant.': '未知的助手。',
   '{name} opened in a new tab. Sign in if needed.': '{name} 已在新标签页中打开。如有需要请先登录。',
   'Unsupported popup action.': '不支持的弹窗操作。',
+  'Create a split from this popup once first. It then remembers that pair.': '请先在这个弹窗里创建一次分屏，之后它会记住那个组合。',
   'The action could not be completed.': '无法完成该操作。',
 
   // ---------- Tabs and Split View ----------
@@ -261,6 +268,7 @@ globalThis.AISplitI18n.register('zh-CN', {
   'Open ChatGPT, Claude, Gemini, or Grok first.': '请先打开 ChatGPT、Claude、Gemini 或 Grok。',
   'Wait for the chat tab to finish navigating.': '请等聊天标签页完成跳转。',
   'The new assistant is still loading. Your original split is unchanged. Try again once it loads.': '新的助手仍在加载。你原来的分屏没有变化。请等它加载完再试。',
+  'The new chat has not finished opening. If it asks you to sign in, do that first, then create the split again.': '新的聊天还没有打开完成。如果它要求登录，请先登录，然后再创建分屏。',
   'Choose two different tabs.': '请选择两个不同的标签页。',
   'Both chats must be in the same Chrome window.': '两个聊天必须在同一个 Chrome 窗口中。',
   'Use tabs in the same tab group with the same pinned state.': '请使用同一标签页组内、固定状态相同的标签页。',

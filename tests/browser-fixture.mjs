@@ -165,6 +165,9 @@ const server = createServer(async (req, res) => {
           async get(key) { return key == null ? {...synced} : (key in synced ? {[key]: synced[key]} : {}); },
           async set(value) { Object.assign(synced, value); sessionStorage.setItem('fixture-sync', JSON.stringify(synced)); },
         }}, runtime:{async sendMessage(m) {
+          // popup.html?pair shows the Split View form, as in a Chrome that lets extensions create splits.
+          if (m.type === 'ASB_LIST' && location.search === '?pair') return {ok:true,canManageSplit:true,activeId:1,peer:null,
+            lastPair:{left:'gemini',right:'claude'},tabs:[{id:1,name:'ChatGPT',title:'New conversation',index:0}]};
           if (m.type === 'ASB_LIST') return {ok:true,canManageSplit:false,activeId:1,peer:{id:2,name:'Claude'},tabs:[
             {id:1,name:'ChatGPT',title:'New conversation',index:0},
             {id:2,name:'Claude',title:'New conversation',index:1}

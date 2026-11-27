@@ -22,6 +22,14 @@ async function shareReply(source, choice, reply, files = [], kind = 'reply') {
   return bridge.share(source.id, choice, text, { send: settings.shareMode === 'send', files });
 }
 
+// The last pair made from the popup is kept by assistant, not by conversation.
+async function lastPair() {
+  const { lastPair: saved } = await chrome.storage.sync.get('lastPair').catch(() => ({}));
+  const known = saved && typeof saved === 'object'
+    && [saved.left, saved.right].every(provider => typeof provider === 'string' && Object.hasOwn(PROVIDERS, provider));
+  return known ? { left: saved.left, right: saved.right } : null;
+}
+
 async function handle(message, sender) {
   await languageReady;
   if (!message || typeof message.type !== 'string' || sender.id !== chrome.runtime.id) throw new Error(t('Unsupported request.'));
@@ -64,11 +72,31 @@ async function handle(message, sender) {
     const active = tabs.find(tab => tab.active);
     let context = null;
     if (active && providerFor(active.url)) context = await manager.context(active.id);
-    return { ok: true, tabs: tabs.map(describe).filter(Boolean), activeId: active?.id, canManageSplit: manager.canManageSplit(), peer: context?.peer ?? null };
+    return {
+      ok: true, tabs: tabs.map(describe).filter(Boolean), activeId: active?.id, canManageSplit: manager.canManageSplit(),
+      peer: context?.peer ?? null, lastPair: await lastPair(),
+    };
   }
   if (message.type === 'ASB_PAIR') {
-    if (!tabs.some(t => t.id === message.leftId) || !tabs.some(t => t.id === message.rightId)) throw new Error(t('Choose chats in this window.'));
-    return bridge.locked(windowId, () => manager.pair(message.leftId, message.rightId));
+    // Each side is an open chat in this window, or an assistant for the extension to open.
+    const [left, right] = [[message.leftId, message.leftProvider], [message.rightId, message.rightProvider]].map(([id, provider]) => {
+      if (provider !== undefined) {
+        if (!Object.hasOwn(PROVIDERS, provider)) throw new Error(t('Unknown assistant.'));
+        return { provider };
+      }
+      if (!tabs.some(tab => tab.id === id)) throw new Error(t('Choose chats in this window.'));
+      return id;
+    });
+    const result = await bridge.locked(windowId, () => manager.pair(left, right, windowId));
+    // Remembered for the popup's one-click button. The split stands even if this cannot be saved.
+    const [leftProvider, rightProvider] = [left, right].map(side => typeof side === 'number' ? providerFor(tabs.find(tab => tab.id === side).url) : side.provider);
+    await chrome.storage.sync.set({ lastPair: { left: leftProvider, right: rightProvider } }).catch(() => {});
+    return result;
+  }
+  if (message.type === 'ASB_PAIR_LAST') {
+    const pair = await lastPair();
+    if (!pair) throw new Error(t('Create a split from this popup once first. It then remembers that pair.'));
+    return bridge.locked(windowId, () => manager.pairAssistants(pair.left, pair.right, windowId));
   }
   if (message.type === 'ASB_OPEN') {
     if (!Object.hasOwn(PROVIDERS, message.provider)) throw new Error(t('Unknown assistant.'));
