@@ -1,23 +1,14 @@
-Use ChatGPT, Claude, Gemini and Grok in Chrome’s native Split View. Ask two assistants the same question, compare their independent answers, or have each assistant review the other’s work.
+Use ChatGPT, Claude, Gemini, and Grok side by side in Chrome’s native Split View. Click Send both to share one prompt with both chats, including links and supported files. You can select more AI tabs or use the usual Send button for one chat.
 
-• Send both — Type once to send the same prompt, links and supported attachments to both chats. You can also select more AI tabs in the same window. Use Cmd+Shift+Enter on Mac or Ctrl+Shift+Enter on Windows and Linux.
+• Compare answers — See where the answers agree, where they differ, and what needs checking, even when both assistants agree.
+• Cross-review — Ask each assistant to critique the other’s answer, then choose one to revise its own.
+• Share messages — Share a prompt, reply, or whole exchange with supported files. Highlight a passage to share just the text.
+• Summarize a chat — Share a summary so another assistant can continue the conversation.
+• Customize actions — Edit the built-in sharing and review prompts, add your own actions like “Check sources,” and set a default.
+• Read and navigate — Switch chats on either side, widen messages, collapse replies, and bookmark a message for later.
 
-• Compare — Choose one assistant to read both answers. It highlights agreements, disagreements, missing details and claims that need evidence, including claims both assistants make.
+No extra account, API key, ads, or analytics. The extension runs in your browser and stores no chat transcripts. Files upload to the destination chat even in draft mode.
 
-• Cross-review — With one click, each assistant critiques the other’s original answer. Choose Find errors or Suggest improvements for a more focused review. Read both critiques side by side, then pick an assistant to revise its answer if you want.
+Requires desktop Chrome 140 or later with Split View. AI Split Bridge is independent of the AI providers.
 
-• Create your own actions — Add “Check citations” to Cross-review or “Extract next steps” to the reply menu. Give each action its own prompt, edit the built-in prompts, and choose a one-click default for each menu. Saved instructions can add rules across actions.
-
-• Share to the other side — Click the other assistant’s name beside a reply or one of your own prompts. Supported prompt attachments and generated files go with the whole message. Use the arrow to change chats, adjust instructions, or leave files out. You can also share a highlighted passage or select several messages in order.
-
-• Switch chats — Choose which conversation appears on either side of the split and return to a previous conversation without rearranging your tabs.
-
-• Reading tools — Widen the message column, collapse individual prompts or replies, and bookmark a message to jump back to it later.
-
-The controls sit inside the AI websites you already use. Each site’s regular Send button still sends only to that chat. AI Split Bridge requires no separate account or API key.
-
-Privacy
-
-The extension runs in your browser. The AI providers you choose receive the content you share. Files upload to the destination chat when added to a draft. The extension does not store chat transcripts or send them to the developer. There are no analytics or ads.
-
-Requires Chrome 140 or later with Split View available. Works on chatgpt.com, claude.ai, gemini.google.com and grok.com. AI Split Bridge is an independent extension. All trademarks belong to their respective owners.
+GitHub: https://github.com/yueyueL/ai-split-bridge

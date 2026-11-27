@@ -45,3 +45,13 @@ When the reply is ready, choose **Share latest reply as context…** to give ano
 The extension runs in your browser and needs no separate account or API key. The assistants you choose receive the content you share. Files upload to the destination chat even when you leave the message as a draft. [Privacy policy](PRIVACY.md)
 
 To run the source locally, enable **Developer mode** at `chrome://extensions`, choose **Load unpacked**, and select the [extension folder](extension/). [Testing guide](docs/TESTING.md)
+
+## 💡 Ideas and Contributions Welcome
+
+AI Split Bridge is a tool I built for my own daily use and continue to improve as AI services evolve.
+
+I'm interested in exploring how we can build better tools around existing AI services to make everyday workflows more productive, efficient, and seamless.
+
+If you have feature requests, workflow ideas, or suggestions for improvement, feel free to [open an issue](https://github.com/yueyueL/ai-split-bridge/issues). Contributions are always welcome!
+
+Let's make working with AI better together.
